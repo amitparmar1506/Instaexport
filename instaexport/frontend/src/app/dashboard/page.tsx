@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
-import { postsApi, razorpayApi } from '@/lib/api';
+import { postsApi, razorpayApi, authApi } from '@/lib/api';
 import {
   Instagram, RefreshCw, LogOut, Search, Film,
   Image as ImageIcon, Grid3x3, Crown, AlertCircle,
@@ -195,7 +195,7 @@ export default function DashboardPage() {
                   Go to Instagram app → Settings → Account → Switch to Professional Account, then reconnect.
                 </p>
                 <button
-                  onClick={() => window.location.href = `${process.env.NEXT_PUBLIC_API_URL}/api/auth/instagram`}
+                  onClick={() => window.location.href = authApi.loginUrl()}
                   className="mt-2 text-xs font-semibold text-amber-700 underline"
                 >
                   Reconnect →
