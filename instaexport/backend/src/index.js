@@ -13,6 +13,7 @@ const jobRoutes = require('./routes/jobs');
 const { initQueue } = require('./workers/queue');
 
 const app = express();
+app.set('trust proxy', 1); // Required for Railway/Vercel proxy
 const PORT = process.env.PORT || 3001;
 
 // ── Security ──────────────────────────────────
