@@ -1,15 +1,14 @@
 import axios from 'axios';
 
-// Always use direct backend URL — strip trailing slash
-const BASE_URL = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
+// Hardcoded Railway backend URL — never relies on env var at runtime
+const BACKEND_URL = 'https://instaexport-production.up.railway.app';
 
 const api = axios.create({
-  baseURL: BASE_URL,
+  baseURL: BACKEND_URL,
   timeout: 30000,
   withCredentials: false,
 });
 
-// Attach JWT token to every request
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('ie_token');
@@ -18,7 +17,6 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle 401 — only clear token on explicit auth failure
 api.interceptors.response.use(
   (res) => res,
   (error) => {
@@ -30,20 +28,17 @@ api.interceptors.response.use(
   }
 );
 
-// ── Auth ──────────────────────────────────────
 export const authApi = {
   getMe: () => api.get('/api/auth/me').then(r => r.data),
   logout: () => api.post('/api/auth/logout'),
-  loginUrl: () => `${BASE_URL}/api/auth/instagram`,
+  loginUrl: () => `${BACKEND_URL}/api/auth/instagram`,
 };
 
-// ── Posts ─────────────────────────────────────
 export const postsApi = {
   list: (refresh = false) => api.get(`/api/posts${refresh ? '?refresh=true' : ''}`).then(r => r.data),
   get: (id: string) => api.get(`/api/posts/${id}`).then(r => r.data),
 };
 
-// ── Comments ──────────────────────────────────
 export const commentsApi = {
   ingest: (postId: string) => api.post('/api/comments/ingest', { postId }).then(r => r.data),
   list: (postId: string, params?: Record<string, any>) =>
@@ -53,14 +48,12 @@ export const commentsApi = {
   analytics: (postId: string) => api.get(`/api/comments/${postId}/analytics`).then(r => r.data),
 };
 
-// ── Jobs ──────────────────────────────────────
 export const jobsApi = {
   get: (jobId: string) => api.get(`/api/jobs/${jobId}`).then(r => r.data),
   list: (postId?: string) => api.get('/api/jobs', { params: postId ? { postId } : {} }).then(r => r.data),
   resume: (jobId: string) => api.post(`/api/jobs/${jobId}/resume`).then(r => r.data),
 };
 
-// ── Razorpay Payments ─────────────────────────
 export const razorpayApi = {
   createOrder: (type: 'pro_monthly' | 'single_post', postId?: string) =>
     api.post('/api/razorpay/create-order', { type, postId }).then(r => r.data),
@@ -74,11 +67,10 @@ export const razorpayApi = {
   subscriptionStatus: () => api.get('/api/razorpay/subscription-status').then(r => r.data),
 };
 
-// ── Export ────────────────────────────────────
 export const exportApi = {
   downloadCsv: async (postId: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('ie_token') : '';
-    const res = await fetch(`${BASE_URL}/api/export/csv/${postId}`, {
+    const res = await fetch(`${BACKEND_URL}/api/export/csv/${postId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error('Export failed');
@@ -93,7 +85,7 @@ export const exportApi = {
 
   downloadPdf: async (postId: string) => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('ie_token') : '';
-    const res = await fetch(`${BASE_URL}/api/export/pdf/${postId}`, {
+    const res = await fetch(`${BACKEND_URL}/api/export/pdf/${postId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
