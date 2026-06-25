@@ -1,10 +1,15 @@
 import axios from 'axios';
 
+// Always use direct backend URL — strip trailing slash
+const BASE_URL = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
+
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL,
+  baseURL: BASE_URL,
   timeout: 30000,
+  withCredentials: false,
 });
 
+// Attach JWT token to every request
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('ie_token');
@@ -13,12 +18,12 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Handle 401 — only clear token on explicit auth failure
 api.interceptors.response.use(
   (res) => res,
   (error) => {
     if (error.response?.status === 401 && typeof window !== 'undefined') {
       localStorage.removeItem('ie_token');
-      localStorage.removeItem('ie_user');
       window.location.href = '/';
     }
     return Promise.reject(error);
@@ -29,6 +34,7 @@ api.interceptors.response.use(
 export const authApi = {
   getMe: () => api.get('/api/auth/me').then(r => r.data),
   logout: () => api.post('/api/auth/logout'),
+  loginUrl: () => `${BASE_URL}/api/auth/instagram`,
 };
 
 // ── Posts ─────────────────────────────────────
@@ -58,7 +64,6 @@ export const jobsApi = {
 export const razorpayApi = {
   createOrder: (type: 'pro_monthly' | 'single_post', postId?: string) =>
     api.post('/api/razorpay/create-order', { type, postId }).then(r => r.data),
-
   verifyPayment: (data: {
     razorpay_order_id: string;
     razorpay_payment_id: string;
@@ -66,15 +71,14 @@ export const razorpayApi = {
     type: string;
     postId?: string;
   }) => api.post('/api/razorpay/verify', data).then(r => r.data),
-
   subscriptionStatus: () => api.get('/api/razorpay/subscription-status').then(r => r.data),
 };
 
 // ── Export ────────────────────────────────────
 export const exportApi = {
   downloadCsv: async (postId: string) => {
-    const token = localStorage.getItem('ie_token');
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/export/csv/${postId}`, {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('ie_token') : '';
+    const res = await fetch(`${BASE_URL}/api/export/csv/${postId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error('Export failed');
@@ -88,13 +92,13 @@ export const exportApi = {
   },
 
   downloadPdf: async (postId: string) => {
-    const token = localStorage.getItem('ie_token');
-    const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/export/pdf/${postId}`, {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('ie_token') : '';
+    const res = await fetch(`${BASE_URL}/api/export/pdf/${postId}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Export failed');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'PDF export failed');
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
