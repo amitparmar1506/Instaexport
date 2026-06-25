@@ -18,7 +18,7 @@ const FB_GRAPH_URL = 'https://graph.facebook.com/v19.0';
 router.get('/instagram', (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.INSTAGRAM_CLIENT_ID,
-    redirect_uri: process.env.INSTAGRAM_REDIRECT_URI,
+    redirect_uri: `${process.env.BACKEND_URL}/api/auth/callback`,
     scope: 'public_profile',
     response_type: 'code',
     state: Math.random().toString(36).substring(7),
@@ -40,7 +40,7 @@ router.get('/callback', async (req, res) => {
       params: {
         client_id: process.env.INSTAGRAM_CLIENT_ID,
         client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
-        redirect_uri: process.env.INSTAGRAM_REDIRECT_URI,
+        redirect_uri: `${process.env.BACKEND_URL}/api/auth/callback`,
         code,
       }
     });
