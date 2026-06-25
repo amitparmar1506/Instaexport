@@ -3,14 +3,13 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/useAuth';
+import { authApi } from '@/lib/api';
 import Link from 'next/link';
 import {
   Instagram, Download, FileText, Search, BarChart3,
   Check, ArrowRight, X, AlertTriangle, Zap, Shield,
   Users, ChevronRight, Star, Clock, RefreshCw
 } from 'lucide-react';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
 // Animated comment thread demo
 function CommentThreadDemo() {
@@ -116,7 +115,7 @@ export default function LandingPage() {
   }, [isAuthenticated, isLoading, router]);
 
   const handleLogin = () => {
-    window.location.href = `${API_URL}/api/auth/instagram`;
+    window.location.href = authApi.loginUrl();
   };
 
   return (
