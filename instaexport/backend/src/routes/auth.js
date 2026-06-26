@@ -6,9 +6,11 @@ const router = express.Router();
 const supabase = require('../db/supabase');
 const authMiddleware = require('../middleware/auth');
 
-const FB_AUTH_URL = 'https://www.facebook.com/v19.0/dialog/oauth';
-const FB_TOKEN_URL = 'https://graph.facebook.com/v19.0/oauth/access_token';
-const FB_GRAPH_URL = 'https://graph.facebook.com/v19.0';
+// New Instagram API (2024) — uses instagram.com OAuth, not facebook.com
+const IG_AUTH_URL = 'https://www.instagram.com/oauth/authorize';
+const IG_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
+const IG_LONG_TOKEN_URL = 'https://graph.instagram.com/access_token';
+const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
 
 const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/$/, '');
 const FRONTEND_URL = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
@@ -18,11 +20,10 @@ router.get('/instagram', (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.INSTAGRAM_CLIENT_ID,
     redirect_uri: `${BACKEND_URL}/api/auth/callback`,
-    scope: 'public_profile',
+    scope: 'instagram_business_basic,instagram_business_manage_comments',
     response_type: 'code',
-    state: Math.random().toString(36).substring(7),
   });
-  res.redirect(`${FB_AUTH_URL}?${params}`);
+  res.redirect(`${IG_AUTH_URL}?${params}`);
 });
 
 // ── GET /api/auth/callback ─────────────────────
@@ -39,96 +40,50 @@ router.get('/callback', async (req, res) => {
 
   try {
     // 1. Exchange code for short-lived token
-    const tokenRes = await axios.get(FB_TOKEN_URL, {
-      params: {
-        client_id: process.env.INSTAGRAM_CLIENT_ID,
-        client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
-        redirect_uri: `${BACKEND_URL}/api/auth/callback`,
-        code,
-      }
+    const tokenRes = await axios.post(IG_TOKEN_URL, new URLSearchParams({
+      client_id: process.env.INSTAGRAM_CLIENT_ID,
+      client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      redirect_uri: `${BACKEND_URL}/api/auth/callback`,
+      code,
+    }), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
 
-    const { access_token: shortToken } = tokenRes.data;
+    const { access_token: shortToken, user_id: igUserId } = tokenRes.data;
+    console.log(`[Auth] Got short token for IG user: ${igUserId}`);
 
     // 2. Exchange for long-lived token (60 days)
-    const longTokenRes = await axios.get(`${FB_GRAPH_URL}/oauth/access_token`, {
+    const longTokenRes = await axios.get(IG_LONG_TOKEN_URL, {
       params: {
-        grant_type: 'fb_exchange_token',
-        client_id: process.env.INSTAGRAM_CLIENT_ID,
+        grant_type: 'ig_exchange_token',
         client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
-        fb_exchange_token: shortToken,
+        access_token: shortToken,
       }
     });
 
     const { access_token: longToken, expires_in } = longTokenRes.data;
 
-    // 3. Get Facebook user profile
-    const meRes = await axios.get(`${FB_GRAPH_URL}/me`, {
+    // 3. Get Instagram profile
+    const profileRes = await axios.get(`${IG_GRAPH_URL}/me`, {
       params: {
-        fields: 'id,name,picture',
+        fields: 'id,username,name,profile_picture_url,followers_count,media_count',
         access_token: longToken,
       }
     });
 
-    const fbUser = meRes.data;
-    let igAccountId = null;
-    let igUsername = null;
-    let igPicture = fbUser.picture?.data?.url || null;
-    let activeToken = longToken;
+    const profile = profileRes.data;
+    console.log(`[Auth] Instagram profile: @${profile.username}`);
 
-    // 4. Try to find Instagram account via Facebook Pages
-    try {
-      const pagesRes = await axios.get(`${FB_GRAPH_URL}/me/accounts`, {
-        params: {
-          fields: 'id,name,access_token,instagram_business_account',
-          access_token: longToken,
-        }
-      });
-
-      const pages = pagesRes.data?.data || [];
-      console.log(`[Auth] Found ${pages.length} Facebook pages`);
-
-      for (const page of pages) {
-        if (page.instagram_business_account?.id) {
-          igAccountId = page.instagram_business_account.id;
-          activeToken = page.access_token || longToken;
-
-          // Get Instagram profile details
-          try {
-            const igRes = await axios.get(`${FB_GRAPH_URL}/${igAccountId}`, {
-              params: {
-                fields: 'id,username,profile_picture_url',
-                access_token: activeToken,
-              }
-            });
-            igUsername = igRes.data.username;
-            igPicture = igRes.data.profile_picture_url || igPicture;
-          } catch (e) {
-            console.log('[Auth] Could not fetch IG profile details:', e.message);
-          }
-          break;
-        }
-      }
-    } catch (e) {
-      console.log('[Auth] Could not fetch pages:', e.message);
-    }
-
-    // 5. Fallback — store with Facebook ID if no Instagram found
-    const storedId = igAccountId || `fb_${fbUser.id}`;
-    const username = igUsername || fbUser.name?.replace(/\s+/g, '').toLowerCase() || `user_${fbUser.id}`;
-    const warning = !igAccountId ? 'no_ig_account' : null;
-
-    console.log(`[Auth] Storing user — IG: ${igAccountId || 'not found'}, FB: ${fbUser.id}`);
-
-    // 6. Upsert user
+    // 4. Upsert user in DB
     const { data: user, error: dbError } = await supabase
       .from('users')
       .upsert({
-        instagram_user_id: storedId,
-        username,
-        full_name: fbUser.name,
-        profile_picture: igPicture,
-        encrypted_access_token: activeToken,
+        instagram_user_id: String(profile.id),
+        username: profile.username,
+        full_name: profile.name || profile.username,
+        profile_picture: profile.profile_picture_url,
+        encrypted_access_token: longToken,
         token_expires_at: new Date(Date.now() + (expires_in || 5184000) * 1000).toISOString(),
         updated_at: new Date().toISOString(),
       }, { onConflict: 'instagram_user_id', ignoreDuplicates: false })
@@ -140,19 +95,15 @@ router.get('/callback', async (req, res) => {
       throw dbError;
     }
 
-    // 7. Issue JWT
+    // 5. Issue JWT (30 day expiry)
     const jwtToken = jwt.sign(
       { userId: user.id, instagramUserId: user.instagram_user_id, username: user.username },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
 
-    // 8. Redirect to frontend
-    const redirectUrl = warning
-      ? `${FRONTEND_URL}/auth/callback?token=${jwtToken}&username=${encodeURIComponent(username)}&warning=${warning}`
-      : `${FRONTEND_URL}/auth/callback?token=${jwtToken}&username=${encodeURIComponent(username)}`;
-
-    res.redirect(redirectUrl);
+    console.log(`[Auth] Login successful for @${profile.username}`);
+    res.redirect(`${FRONTEND_URL}/auth/callback?token=${jwtToken}&username=${encodeURIComponent(profile.username)}`);
 
   } catch (err) {
     console.error('[Auth] Callback error:', err.response?.data || err.message);
