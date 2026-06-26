@@ -129,5 +129,3 @@ router.post('/logout', authMiddleware, (req, res) => {
 });
 
 module.exports = router;
-EOF
-echo "auth.js rewritten for new Instagram API"
