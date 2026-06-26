@@ -19,7 +19,7 @@ router.get('/instagram', (req, res) => {
   const params = new URLSearchParams({
     client_id: process.env.INSTAGRAM_CLIENT_ID,
     redirect_uri: `${process.env.BACKEND_URL}/api/auth/callback`,
-    scope: 'public_profile',
+    scope: 'public_profile,pages_show_list,instagram_basic',
     response_type: 'code',
     state: Math.random().toString(36).substring(7),
   });
