@@ -2,36 +2,45 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+
 const router = express.Router();
 const supabase = require('../db/supabase');
 const authMiddleware = require('../middleware/auth');
 
-// New Instagram API (2024) — uses instagram.com OAuth, not facebook.com
-const IG_AUTH_URL = 'https://www.instagram.com/oauth/authorize';
-const IG_TOKEN_URL = 'https://api.instagram.com/oauth/access_token';
-const IG_LONG_TOKEN_URL = 'https://graph.instagram.com/access_token';
-const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
-
+const GRAPH_API_VERSION = 'v21.0';
 const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/$/, '');
 const FRONTEND_URL = (process.env.FRONTEND_URL || '').replace(/\/$/, '');
 
-// ── GET /api/auth/instagram ────────────────────
+// ─────────────────────────────────────────────
+// STEP 1: Redirect user to Meta login
+// ─────────────────────────────────────────────
 router.get('/instagram', (req, res) => {
   const params = new URLSearchParams({
-    client_id: process.env.INSTAGRAM_CLIENT_ID,
+    client_id: process.env.INSTAGRAM_CLIENT_ID, // META APP ID
     redirect_uri: `${BACKEND_URL}/api/auth/callback`,
-    scope: 'instagram_business_basic,instagram_business_manage_comments',
     response_type: 'code',
+    scope: [
+      'instagram_basic',
+      'instagram_manage_comments',
+      'pages_show_list',
+      'pages_read_engagement'
+    ].join(','),
   });
-  res.redirect(`${IG_AUTH_URL}?${params}`);
+
+  const authUrl =
+    `https://www.facebook.com/${GRAPH_API_VERSION}/dialog/oauth?${params.toString()}`;
+
+  return res.redirect(authUrl);
 });
 
-// ── GET /api/auth/callback ─────────────────────
+// ─────────────────────────────────────────────
+// STEP 2: OAuth callback
+// ─────────────────────────────────────────────
 router.get('/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, error_reason } = req.query;
 
   if (error) {
-    return res.redirect(`${FRONTEND_URL}/auth/error?reason=${error}`);
+    return res.redirect(`${FRONTEND_URL}/auth/error?reason=${error_reason || error}`);
   }
 
   if (!code) {
@@ -39,91 +48,141 @@ router.get('/callback', async (req, res) => {
   }
 
   try {
+    // ─────────────────────────────────────────────
     // 1. Exchange code for short-lived token
-    const tokenRes = await axios.post(IG_TOKEN_URL, new URLSearchParams({
-      client_id: process.env.INSTAGRAM_CLIENT_ID,
-      client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
-      grant_type: 'authorization_code',
-      redirect_uri: `${BACKEND_URL}/api/auth/callback`,
-      code,
-    }), {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    });
-
-    const { access_token: shortToken, user_id: igUserId } = tokenRes.data;
-    console.log(`[Auth] Got short token for IG user: ${igUserId}`);
-
-    // 2. Exchange for long-lived token (60 days)
-    const longTokenRes = await axios.get(IG_LONG_TOKEN_URL, {
-      params: {
-        grant_type: 'ig_exchange_token',
-        client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
-        access_token: shortToken,
+    // ─────────────────────────────────────────────
+    const tokenRes = await axios.get(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/oauth/access_token`,
+      {
+        params: {
+          client_id: process.env.INSTAGRAM_CLIENT_ID,
+          client_secret: process.env.INSTAGRAM_CLIENT_SECRET,
+          redirect_uri: `${BACKEND_URL}/api/auth/callback`,
+          code,
+        },
       }
-    });
+    );
 
-    const { access_token: longToken, expires_in } = longTokenRes.data;
+    const { access_token } = tokenRes.data;
 
-    // 3. Get Instagram profile
-    const profileRes = await axios.get(`${IG_GRAPH_URL}/me`, {
-      params: {
-        fields: 'id,username,name,profile_picture_url,followers_count,media_count',
-        access_token: longToken,
+    // ─────────────────────────────────────────────
+    // 2. Get Facebook Pages connected to user
+    // (Required step for Instagram Graph API)
+    // ─────────────────────────────────────────────
+    const pagesRes = await axios.get(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/me/accounts`,
+      {
+        params: { access_token },
       }
-    });
+    );
+
+    const page = pagesRes.data?.data?.[0];
+    if (!page) {
+      throw new Error('No Facebook Page connected to this account');
+    }
+
+    // ─────────────────────────────────────────────
+    // 3. Get Instagram Business Account ID
+    // ─────────────────────────────────────────────
+    const igRes = await axios.get(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${page.id}`,
+      {
+        params: {
+          fields: 'instagram_business_account',
+          access_token: page.access_token,
+        },
+      }
+    );
+
+    const igUserId = igRes.data?.instagram_business_account?.id;
+
+    if (!igUserId) {
+      throw new Error('No Instagram Business account linked to this Page');
+    }
+
+    // ─────────────────────────────────────────────
+    // 4. Get Instagram profile
+    // ─────────────────────────────────────────────
+    const profileRes = await axios.get(
+      `https://graph.facebook.com/${GRAPH_API_VERSION}/${igUserId}`,
+      {
+        params: {
+          fields: 'id,username,name,profile_picture_url,followers_count,media_count',
+          access_token: page.access_token,
+        },
+      }
+    );
 
     const profile = profileRes.data;
-    console.log(`[Auth] Instagram profile: @${profile.username}`);
 
-    // 4. Upsert user in DB
+    // ─────────────────────────────────────────────
+    // 5. Store / update user in DB
+    // ─────────────────────────────────────────────
     const { data: user, error: dbError } = await supabase
       .from('users')
-      .upsert({
-        instagram_user_id: String(profile.id),
-        username: profile.username,
-        full_name: profile.name || profile.username,
-        profile_picture: profile.profile_picture_url,
-        encrypted_access_token: longToken,
-        token_expires_at: new Date(Date.now() + (expires_in || 5184000) * 1000).toISOString(),
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'instagram_user_id', ignoreDuplicates: false })
+      .upsert(
+        {
+          instagram_user_id: String(profile.id),
+          username: profile.username,
+          full_name: profile.name || profile.username,
+          profile_picture: profile.profile_picture_url,
+          encrypted_access_token: page.access_token,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'instagram_user_id' }
+      )
       .select()
       .single();
 
-    if (dbError) {
-      console.error('[Auth] DB error:', dbError);
-      throw dbError;
-    }
+    if (dbError) throw dbError;
 
-    // 5. Issue JWT (30 day expiry)
+    // ─────────────────────────────────────────────
+    // 6. Issue JWT
+    // ─────────────────────────────────────────────
     const jwtToken = jwt.sign(
-      { userId: user.id, instagramUserId: user.instagram_user_id, username: user.username },
+      {
+        userId: user.id,
+        instagramUserId: profile.id,
+        username: profile.username,
+      },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
 
-    console.log(`[Auth] Login successful for @${profile.username}`);
-    res.redirect(`${FRONTEND_URL}/auth/callback?token=${jwtToken}&username=${encodeURIComponent(profile.username)}`);
-
+    return res.redirect(
+      `${FRONTEND_URL}/auth/callback?token=${jwtToken}&username=${encodeURIComponent(
+        profile.username
+      )}`
+    );
   } catch (err) {
-    console.error('[Auth] Callback error:', err.response?.data || err.message);
-    res.redirect(`${FRONTEND_URL}/auth/error?reason=oauth_failed`);
+    console.error('[AUTH ERROR]', err.response?.data || err.message);
+
+    return res.redirect(
+      `${FRONTEND_URL}/auth/error?reason=oauth_failed`
+    );
   }
 });
 
-// ── GET /api/auth/me ───────────────────────────
+// ─────────────────────────────────────────────
+// STEP 3: Get current user
+// ─────────────────────────────────────────────
 router.get('/me', authMiddleware, async (req, res) => {
-  const { data: user, error } = await supabase
+  const { data, error } = await supabase
     .from('users')
-    .select('id, username, full_name, profile_picture, plan, pro_expires_at, total_comments_exported, created_at')
+    .select(
+      'id, username, full_name, profile_picture, plan, created_at'
+    )
     .eq('id', req.user.userId)
     .single();
 
   if (error) return res.status(404).json({ error: 'User not found' });
-  res.json(user);
+
+  res.json(data);
 });
 
-// ── POST /api/auth/logout ──────────────────────
+// ─────────────────────────────────────────────
+// STEP 4: Logout (client-side JWT only)
+// ─────────────────────────────────────────────
 router.post('/logout', authMiddleware, (req, res) => {
   res.json({ success: true });
 });
