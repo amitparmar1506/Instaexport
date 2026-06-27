@@ -1,20 +1,17 @@
 const axios = require('axios');
 const supabase = require('../db/supabase');
 
-const GRAPH_URL = 'https://graph.instagram.com';
-const BATCH_SIZE = 50; // Instagram API max per page
+// New Instagram Graph API 2024
+const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
+const BATCH_SIZE = 50;
 
-// ── Main worker function ───────────────────────
 async function processCommentIngestion(job) {
   const { jobId, userId, postId, instagramMediaId, limit } = job.data;
-
   console.log(`[Worker] Starting job ${jobId} for post ${instagramMediaId}`);
 
   try {
-    // Update job status
     await updateJobStatus(jobId, 'running');
 
-    // Get user's access token
     const { data: user } = await supabase
       .from('users')
       .select('encrypted_access_token')
@@ -24,7 +21,6 @@ async function processCommentIngestion(job) {
     if (!user) throw new Error('User not found');
     const accessToken = user.encrypted_access_token;
 
-    // Fetch existing job to check resume cursor
     const { data: jobRecord } = await supabase
       .from('export_jobs')
       .select('next_cursor, processed_comments')
@@ -33,13 +29,10 @@ async function processCommentIngestion(job) {
 
     let cursor = jobRecord?.next_cursor || null;
     let processedCount = jobRecord?.processed_comments || 0;
-    let totalFetched = 0;
     const hardLimit = limit || Infinity;
 
-    // ── Paginated ingestion loop ──────────────────
     while (true) {
       if (processedCount >= hardLimit) {
-        // Hit free tier limit — pause job
         await updateJobStatus(jobId, 'paused', {
           processed_comments: processedCount,
           next_cursor: cursor,
@@ -50,7 +43,6 @@ async function processCommentIngestion(job) {
 
       const batchLimit = Math.min(BATCH_SIZE, hardLimit - processedCount);
 
-      // Fetch root comments
       const params = {
         fields: 'id,text,like_count,timestamp,username,replies{id,text,like_count,timestamp,username}',
         limit: batchLimit,
@@ -60,7 +52,8 @@ async function processCommentIngestion(job) {
 
       let response;
       try {
-        response = await axios.get(`${GRAPH_URL}/${instagramMediaId}/comments`, { params });
+        // New Instagram API endpoint for comments
+        response = await axios.get(`${IG_GRAPH_URL}/${instagramMediaId}/comments`, { params });
       } catch (apiErr) {
         const errMsg = apiErr.response?.data?.error?.message || apiErr.message;
         console.error(`[Worker] API error:`, errMsg);
@@ -73,7 +66,6 @@ async function processCommentIngestion(job) {
 
       if (rootComments.length === 0) break;
 
-      // ── Process and store each comment ────────────
       for (const comment of rootComments) {
         const commentDbId = await upsertComment(postId, {
           instagram_comment_id: comment.id,
@@ -85,7 +77,6 @@ async function processCommentIngestion(job) {
           instagram_timestamp: comment.timestamp,
         });
 
-        // Process replies
         if (comment.replies?.data?.length > 0) {
           for (const reply of comment.replies.data) {
             await upsertComment(postId, {
@@ -99,12 +90,9 @@ async function processCommentIngestion(job) {
             });
           }
         }
-
         processedCount++;
-        totalFetched++;
       }
 
-      // Update progress in DB every batch
       await supabase
         .from('export_jobs')
         .update({
@@ -115,14 +103,10 @@ async function processCommentIngestion(job) {
         })
         .eq('id', jobId);
 
-      // No more pages
       if (!cursor) break;
-
-      // Small delay to respect API rate limits
       await sleep(200);
     }
 
-    // ── Job complete ──────────────────────────────
     if (processedCount < hardLimit || limit === null) {
       await updateJobStatus(jobId, 'completed', { processed_comments: processedCount, progress: 100 });
       await computeAnalytics(postId);
@@ -132,11 +116,9 @@ async function processCommentIngestion(job) {
   } catch (err) {
     console.error(`[Worker] Job ${jobId} failed:`, err.message);
     await updateJobStatus(jobId, 'failed', { error_message: err.message });
-    throw err; // pg-boss will retry
+    throw err;
   }
 }
-
-// ── Helpers ────────────────────────────────────
 
 async function upsertComment(postId, data) {
   const { data: comment, error } = await supabase
@@ -144,7 +126,7 @@ async function upsertComment(postId, data) {
     .upsert({
       post_id: postId,
       instagram_comment_id: data.instagram_comment_id,
-      commenter_username: data.commenter_username, // Real Instagram username — always preserved
+      commenter_username: data.commenter_username,
       text: data.text,
       like_count: data.like_count,
       parent_id: data.parent_id,
@@ -154,10 +136,7 @@ async function upsertComment(postId, data) {
     .select('id')
     .single();
 
-  if (error) {
-    console.error('[Worker] Upsert error:', error.message);
-    return null;
-  }
+  if (error) { console.error('[Worker] Upsert error:', error.message); return null; }
   return comment.id;
 }
 
@@ -169,11 +148,7 @@ async function updateJobStatus(jobId, status, extra = {}) {
 }
 
 async function getTotal(jobId) {
-  const { data } = await supabase
-    .from('export_jobs')
-    .select('total_comments')
-    .eq('id', jobId)
-    .single();
+  const { data } = await supabase.from('export_jobs').select('total_comments').eq('id', jobId).single();
   return data?.total_comments || 1;
 }
 
@@ -181,7 +156,7 @@ async function computeAnalytics(postId) {
   try {
     const { data: comments } = await supabase
       .from('comments')
-      .select('id, parent_id, depth, commenter_instagram_id, commenter_username, like_count, instagram_timestamp')
+      .select('id, parent_id, depth, commenter_username, like_count, instagram_timestamp')
       .eq('post_id', postId);
 
     if (!comments?.length) return;
@@ -189,14 +164,12 @@ async function computeAnalytics(postId) {
     const total = comments.length;
     const replies = comments.filter(c => c.depth > 0).length;
     const uniqueCommenters = new Set(comments.map(c => c.commenter_username)).size;
-
     const depthDist = {};
     comments.forEach(c => {
       const key = c.depth >= 3 ? '3+' : String(c.depth);
       depthDist[key] = (depthDist[key] || 0) + 1;
     });
 
-    // Hourly activity
     const hourMap = {};
     comments.forEach(c => {
       if (c.instagram_timestamp) {
@@ -204,31 +177,29 @@ async function computeAnalytics(postId) {
         hourMap[hour] = (hourMap[hour] || 0) + 1;
       }
     });
+
     const hourlyActivity = Object.entries(hourMap)
       .map(([hour, count]) => ({ hour: parseInt(hour), comments: count }))
       .sort((a, b) => a.hour - b.hour);
 
-    // Top comments by likes
     const topComments = [...comments]
       .filter(c => c.depth === 0)
       .sort((a, b) => (b.like_count || 0) - (a.like_count || 0))
       .slice(0, 10)
       .map(c => ({ id: c.id, username: c.commenter_username, likes: c.like_count }));
 
-    await supabase
-      .from('post_analytics')
-      .upsert({
-        post_id: postId,
-        total_comments: total,
-        total_replies: replies,
-        unique_commenters: uniqueCommenters,
-        reply_ratio: total > 0 ? (replies / total).toFixed(4) : 0,
-        max_depth: Math.max(...comments.map(c => c.depth)),
-        depth_distribution: depthDist,
-        hourly_activity: hourlyActivity,
-        top_comments: topComments,
-        computed_at: new Date().toISOString(),
-      }, { onConflict: 'post_id' });
+    await supabase.from('post_analytics').upsert({
+      post_id: postId,
+      total_comments: total,
+      total_replies: replies,
+      unique_commenters: uniqueCommenters,
+      reply_ratio: total > 0 ? (replies / total).toFixed(4) : 0,
+      max_depth: Math.max(...comments.map(c => c.depth)),
+      depth_distribution: depthDist,
+      hourly_activity: hourlyActivity,
+      top_comments: topComments,
+      computed_at: new Date().toISOString(),
+    }, { onConflict: 'post_id' });
 
     console.log(`[Worker] Analytics computed for post ${postId}`);
   } catch (err) {
@@ -236,8 +207,6 @@ async function computeAnalytics(postId) {
   }
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 module.exports = { processCommentIngestion };
