@@ -138,7 +138,7 @@ export default function PostDetailPage() {
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">Export</p>
           <button
             onClick={() => handleExport('csv')}
-            disabled={!!isExporting}
+            disabled={!!isExporting || !!isIngesting}
             className="w-full flex items-center gap-2.5 px-3 py-2.5 bg-gray-50 hover:bg-gray-100 rounded-xl text-sm font-medium text-gray-700 transition-colors disabled:opacity-50"
           >
             <Download className="w-4 h-4 text-blue-500" />
@@ -146,7 +146,7 @@ export default function PostDetailPage() {
           </button>
           <button
             onClick={() => handleExport('pdf')}
-            disabled={!!isExporting}
+            disabled={!!isExporting || !!isIngesting}
             className="w-full flex items-center gap-2.5 px-3 py-2.5 bg-gray-50 hover:bg-gray-100 rounded-xl text-sm font-medium text-gray-700 transition-colors disabled:opacity-50"
           >
             <FileText className="w-4 h-4 text-purple-500" />
