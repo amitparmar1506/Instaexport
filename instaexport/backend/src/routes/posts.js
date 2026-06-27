@@ -4,7 +4,8 @@ const router = express.Router();
 const supabase = require('../db/supabase');
 const authMiddleware = require('../middleware/auth');
 
-const FB_GRAPH_URL = 'https://graph.facebook.com/v19.0';
+// New Instagram Graph API 2024
+const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
 
 async function getUserData(userId) {
   const { data, error } = await supabase
@@ -17,83 +18,17 @@ async function getUserData(userId) {
   if (data.token_expires_at && new Date(data.token_expires_at) < new Date()) {
     throw new Error('Token expired. Please reconnect your Instagram account.');
   }
-
   return { token: data.encrypted_access_token, igAccountId: data.instagram_user_id };
-}
-
-// ── Resolve real Instagram account ID from token ──
-async function resolveIgAccountId(token, storedIgId) {
-  // If stored ID starts with fb_ it's a Facebook ID not Instagram ID
-  // We need to find the real Instagram Business Account ID
-  if (storedIgId && !storedIgId.startsWith('fb_')) {
-    return storedIgId; // Already a real IG account ID
-  }
-
-  console.log('[Posts] Stored ID is Facebook ID, resolving real Instagram account...');
-
-  // Step 1: Get Facebook Pages
-  try {
-    const pagesRes = await axios.get(`${FB_GRAPH_URL}/me/accounts`, {
-      params: {
-        fields: 'id,name,access_token,instagram_business_account',
-        access_token: token,
-      }
-    });
-
-    const pages = pagesRes.data.data || [];
-    console.log(`[Posts] Found ${pages.length} Facebook pages`);
-
-    for (const page of pages) {
-      if (page.instagram_business_account?.id) {
-        console.log(`[Posts] Found Instagram account: ${page.instagram_business_account.id}`);
-        return { igId: page.instagram_business_account.id, pageToken: page.access_token };
-      }
-    }
-  } catch (err) {
-    console.error('[Posts] Error fetching pages:', err.response?.data || err.message);
-  }
-
-  // Step 2: Try direct me endpoint
-  try {
-    const meRes = await axios.get(`${FB_GRAPH_URL}/me`, {
-      params: {
-        fields: 'id,instagram_business_account',
-        access_token: token,
-      }
-    });
-    if (meRes.data.instagram_business_account?.id) {
-      return { igId: meRes.data.instagram_business_account.id, pageToken: token };
-    }
-  } catch (err) {
-    console.error('[Posts] Error fetching me:', err.message);
-  }
-
-  throw new Error('No Instagram Business or Creator account found. Please make sure your Instagram is linked to a Facebook Page and reconnect.');
 }
 
 // ── GET /api/posts ─────────────────────────────
 router.get('/', authMiddleware, async (req, res) => {
   const { refresh } = req.query;
-
   try {
-    const { token, igAccountId: storedIgId } = await getUserData(req.user.userId);
-
-    // Resolve real Instagram account ID
-    const resolved = await resolveIgAccountId(token, storedIgId);
-    const igAccountId = typeof resolved === 'string' ? resolved : resolved.igId;
-    const activeToken = typeof resolved === 'string' ? token : (resolved.pageToken || token);
-
-    // Update DB with real IG account ID if it was wrong
-    if (storedIgId !== igAccountId) {
-      console.log(`[Posts] Updating stored IG ID from ${storedIgId} to ${igAccountId}`);
-      await supabase
-        .from('users')
-        .update({ instagram_user_id: igAccountId })
-        .eq('id', req.user.userId);
-    }
+    const { token, igAccountId } = await getUserData(req.user.userId);
 
     if (refresh === 'true') {
-      await syncPosts(req.user.userId, activeToken, igAccountId);
+      await syncPosts(req.user.userId, token, igAccountId);
     }
 
     const { data: posts, error } = await supabase
@@ -105,7 +40,7 @@ router.get('/', authMiddleware, async (req, res) => {
     if (error) throw error;
 
     if (posts.length === 0) {
-      await syncPosts(req.user.userId, activeToken, igAccountId);
+      await syncPosts(req.user.userId, token, igAccountId);
       const { data: freshPosts } = await supabase
         .from('posts')
         .select('*')
@@ -134,12 +69,13 @@ router.get('/:id', authMiddleware, async (req, res) => {
   res.json(post);
 });
 
-// ── Sync posts from Instagram Graph API ────────
+// ── Sync posts from new Instagram API ──────────
 async function syncPosts(userId, accessToken, igAccountId) {
   try {
-    console.log(`[Posts] Syncing posts for IG account: ${igAccountId}`);
+    console.log(`[Posts] Syncing for IG account: ${igAccountId}`);
 
-    const response = await axios.get(`${FB_GRAPH_URL}/${igAccountId}/media`, {
+    // New Instagram API endpoint
+    const response = await axios.get(`${IG_GRAPH_URL}/${igAccountId}/media`, {
       params: {
         fields: 'id,caption,media_type,media_url,thumbnail_url,permalink,comments_count,like_count,timestamp',
         limit: 50,
@@ -168,7 +104,7 @@ async function syncPosts(userId, accessToken, igAccountId) {
         }, { onConflict: 'user_id,instagram_media_id' });
     }
 
-    console.log(`[Posts] Synced ${items.length} posts for user ${userId}`);
+    console.log(`[Posts] Synced ${items.length} posts`);
   } catch (err) {
     console.error('[Posts] Sync failed:', err.response?.data || err.message);
     throw err;
