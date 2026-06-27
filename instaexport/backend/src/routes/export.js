@@ -135,7 +135,7 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
 
     const threadedHtml = buildThreadedHtml(comments, access.post, access.isUnlocked);
 
-   browser = await puppeteer.launch({
+browser = await puppeteer.launch({
   headless: 'new',
   args: [
     '--no-sandbox',
