@@ -1,6 +1,5 @@
 import axios from 'axios';
 
-// Hardcoded Railway backend URL — never relies on env var at runtime
 const BACKEND_URL = 'https://instaexport-production.up.railway.app';
 
 const api = axios.create({
@@ -79,7 +78,9 @@ export const exportApi = {
     const a = document.createElement('a');
     a.href = url;
     a.download = `comments_${postId}.csv`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   },
 
@@ -90,14 +91,16 @@ export const exportApi = {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'PDF export failed');
+      throw new Error(err.detail || err.error || `PDF export failed (${res.status})`);
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `comments_${postId}.pdf`;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   },
 };
