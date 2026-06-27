@@ -13,8 +13,11 @@ const jobRoutes = require('./routes/jobs');
 const { initQueue } = require('./workers/queue');
 
 const app = express();
-app.set('trust proxy', 1); // Required for Railway/Vercel proxy
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
+
+// ── Security ──────────────────────────────────
+app.use(helmet());
 
 const allowedOrigins = [
   process.env.FRONTEND_URL,
@@ -27,7 +30,6 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-
     console.warn('[CORS] Blocked origin:', origin);
     return callback(new Error(`CORS blocked origin: ${origin}`));
   },
@@ -36,29 +38,18 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 }));
 
-// ── Security ──────────────────────────────────
-app.use(helmet());
-app.use(cors({
-  origin: [process.env.FRONTEND_URL, 'http://localhost:3000'],
-  credentials: true
-}));
-
 app.use(express.json());
 
-// ── Rate limiting ──────────────────────────────
-
+// ── Request logging ────────────────────────────
 app.use((req, res, next) => {
   const startedAt = Date.now();
-
   res.on('finish', () => {
-    console.log(
-      `[HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms origin=${req.headers.origin || '-'}`
-    );
+    console.log(`[HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms origin=${req.headers.origin || '-'}`);
   });
-
   next();
 });
 
+// ── Rate limiting ──────────────────────────────
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
