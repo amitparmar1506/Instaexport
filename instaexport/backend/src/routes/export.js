@@ -5,28 +5,39 @@ const router = express.Router();
 const supabase = require('../db/supabase');
 const authMiddleware = require('../middleware/auth');
 
-// PDF is available on ALL tiers — free gets 500 comments, pro gets unlimited
-// Usernames are ALWAYS preserved (real Instagram @usernames, no anonymization)
+// PDF is available on ALL tiers - free gets 500 comments, pro gets unlimited
+// Usernames are ALWAYS preserved.
 
 async function checkAccess(userId, postId) {
-  const { data: post } = await supabase
+  const { data: post, error: postError } = await supabase
     .from('posts')
     .select('id, caption, media_type, permalink, instagram_media_id, comment_count')
     .eq('id', postId)
     .eq('user_id', userId)
-    .single();
+    .maybeSingle();
+
+  if (postError) {
+    console.error('[Export] Post lookup error:', postError.message);
+    return { error: 'Failed to verify post access', status: 500 };
+  }
 
   if (!post) return { error: 'Post not found', status: 404 };
 
-  const { data: user } = await supabase
+  const { data: user, error: userError } = await supabase
     .from('users')
     .select('plan, pro_expires_at')
     .eq('id', userId)
-    .single();
+    .maybeSingle();
 
-  const isPro = user?.plan === 'pro' && (!user.pro_expires_at || new Date(user.pro_expires_at) > new Date());
+  if (userError) {
+    console.error('[Export] User lookup error:', userError.message);
+  }
 
-  const { data: purchase } = await supabase
+  const isPro =
+    user?.plan === 'pro' &&
+    (!user.pro_expires_at || new Date(user.pro_expires_at) > new Date());
+
+  const { data: purchase, error: purchaseError } = await supabase
     .from('purchases')
     .select('id')
     .eq('user_id', userId)
@@ -34,14 +45,21 @@ async function checkAccess(userId, postId) {
     .eq('status', 'completed')
     .maybeSingle();
 
+  if (purchaseError) {
+    console.error('[Export] Purchase lookup error:', purchaseError.message);
+  }
+
   return { post, isUnlocked: isPro || !!purchase, isPro };
 }
 
-// ── GET /api/export/csv/:postId ────────────────
+// GET /api/export/csv/:postId
 router.get('/csv/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const access = await checkAccess(req.user.userId, postId);
-  if (access.error) return res.status(access.status).json({ error: access.error });
+
+  if (access.error) {
+    return res.status(access.status).json({ error: access.error });
+  }
 
   try {
     let query = supabase
@@ -50,11 +68,20 @@ router.get('/csv/:postId', authMiddleware, async (req, res) => {
       .eq('post_id', postId)
       .order('instagram_timestamp', { ascending: true });
 
-    // Free tier: 500 comment limit; Pro/purchased: unlimited
     if (!access.isUnlocked) query = query.limit(500);
 
-    const { data: comments, error } = await query;
-    if (error) throw error;
+    const { data: comments, error: commentsError } = await query;
+
+    if (commentsError) {
+      console.error('[Export] CSV comments query error:', commentsError.message);
+      return res.status(500).json({ error: 'Failed to load comments for CSV export' });
+    }
+
+    if (!comments?.length) {
+      return res.status(409).json({
+        error: 'Comments are not ready yet. Please wait for sync to complete.',
+      });
+    }
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="comments_${postId}.csv"`);
@@ -69,7 +96,7 @@ router.get('/csv/:postId', authMiddleware, async (req, res) => {
     for (const c of comments) {
       csvStream.write({
         comment_id: c.instagram_comment_id,
-        username: c.commenter_username, // REAL username always preserved
+        username: c.commenter_username,
         text: c.text,
         likes: c.like_count,
         depth: c.depth,
@@ -80,29 +107,37 @@ router.get('/csv/:postId', authMiddleware, async (req, res) => {
 
     csvStream.end();
 
-    // Update export count
-    const { data: currentUser } = await supabase
+    const { data: currentUser, error: currentUserError } = await supabase
       .from('users')
       .select('total_comments_exported')
       .eq('id', req.user.userId)
-      .single();
-    await supabase
-      .from('users')
-      .update({ total_comments_exported: (currentUser?.total_comments_exported || 0) + comments.length })
-      .eq('id', req.user.userId);
+      .maybeSingle();
 
+    if (!currentUserError) {
+      await supabase
+        .from('users')
+        .update({
+          total_comments_exported:
+            (currentUser?.total_comments_exported || 0) + comments.length,
+        })
+        .eq('id', req.user.userId);
+    }
   } catch (err) {
     console.error('[Export] CSV error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/export/pdf/:postId ────────────────
-// PDF available on ALL tiers (free=500 comments, pro=unlimited)
+// GET /api/export/pdf/:postId
 router.get('/pdf/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const access = await checkAccess(req.user.userId, postId);
-  if (access.error) return res.status(access.status).json({ error: access.error });
+
+  if (access.error) {
+    return res.status(access.status).json({ error: access.error });
+  }
+
+  let browser;
 
   try {
     let query = supabase
@@ -112,15 +147,24 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
       .order('depth', { ascending: true })
       .order('instagram_timestamp', { ascending: true });
 
-    // Free tier: 500 comments; Pro/purchased: unlimited
     if (!access.isUnlocked) query = query.limit(500);
 
-    const { data: comments } = await query;
-    if (!comments?.length) return res.status(404).json({ error: 'No comments found. Please sync first.' });
+    const { data: comments, error: commentsError } = await query;
+
+    if (commentsError) {
+      console.error('[Export] PDF comments query error:', commentsError.message);
+      return res.status(500).json({ error: 'Failed to load comments for PDF export' });
+    }
+
+    if (!comments?.length) {
+      return res.status(409).json({
+        error: 'Comments are not ready yet. Please wait for sync to complete.',
+      });
+    }
 
     const threadedHtml = buildThreadedHtml(comments, access.post, access.isUnlocked);
 
-    const browser = await puppeteer.launch({
+    browser = await puppeteer.launch({
       headless: 'new',
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
@@ -139,29 +183,36 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
       printBackground: true,
       margin: { top: '15mm', bottom: '15mm', left: '12mm', right: '12mm' },
       displayHeaderFooter: true,
-      headerTemplate: '<div style="font-size:8px;color:#999;width:100%;text-align:center;padding-top:5px;">CommentExport — Comment Archive</div>',
-      footerTemplate: '<div style="font-size:8px;color:#999;width:100%;text-align:center;padding-bottom:5px;"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
+      headerTemplate:
+        '<div style="font-size:8px;color:#999;width:100%;text-align:center;padding-top:5px;">CommentExport - Comment Archive</div>',
+      footerTemplate:
+        '<div style="font-size:8px;color:#999;width:100%;text-align:center;padding-bottom:5px;"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
     });
-
-    await browser.close();
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="comments_${postId}.pdf"`);
     res.send(pdfBuffer);
-
   } catch (err) {
     console.error('[Export] PDF error:', err.message);
     if (!res.headersSent) res.status(500).json({ error: err.message });
+  } finally {
+    if (browser) {
+      await browser.close().catch((err) => {
+        console.error('[Export] Failed to close browser:', err.message);
+      });
+    }
   }
 });
 
-// ── Build Instagram-style threaded HTML ────────
 function buildThreadedHtml(comments, post, isUnlocked) {
   const tree = {};
   const roots = [];
 
-  comments.forEach(c => { tree[c.id] = { ...c, children: [] }; });
-  comments.forEach(c => {
+  comments.forEach((c) => {
+    tree[c.id] = { ...c, children: [] };
+  });
+
+  comments.forEach((c) => {
     if (c.parent_id && tree[c.parent_id]) {
       tree[c.parent_id].children.push(tree[c.id]);
     } else {
@@ -173,20 +224,30 @@ function buildThreadedHtml(comments, post, isUnlocked) {
     const indent = depth * 20;
     const avatarColor = stringToColor(node.commenter_username || '?');
     const initial = (node.commenter_username || '?')[0].toUpperCase();
-    const children = node.children.map(child => renderComment(child, depth + 1)).join('');
-    const date = node.instagram_timestamp ? new Date(node.instagram_timestamp).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    const children = node.children.map((child) => renderComment(child, depth + 1)).join('');
+    const date = node.instagram_timestamp
+      ? new Date(node.instagram_timestamp).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        })
+      : '';
 
     return `
       <div style="margin-left:${indent}px;margin-bottom:10px;position:relative;">
-        ${depth > 0 ? `<div style="position:absolute;left:-12px;top:0;bottom:0;width:1.5px;background:#e0e0e0;border-radius:1px;"></div>` : ''}
+        ${
+          depth > 0
+            ? '<div style="position:absolute;left:-12px;top:0;bottom:0;width:1.5px;background:#e0e0e0;border-radius:1px;"></div>'
+            : ''
+        }
         <div style="display:flex;align-items:flex-start;gap:8px;">
           <div style="width:28px;height:28px;border-radius:50%;background:${avatarColor};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;flex-shrink:0;margin-top:2px;">
-            ${initial}
+            ${escapeHtml(initial)}
           </div>
           <div style="flex:1;min-width:0;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap;">
               <span style="font-weight:700;font-size:12px;color:#262626;">@${escapeHtml(node.commenter_username || 'unknown')}</span>
-              ${node.like_count > 0 ? `<span style="font-size:11px;color:#8e8e8e;">❤️ ${node.like_count}</span>` : ''}
+              ${node.like_count > 0 ? `<span style="font-size:11px;color:#8e8e8e;">Likes ${node.like_count}</span>` : ''}
               ${date ? `<span style="font-size:10px;color:#aaa;margin-left:auto;">${date}</span>` : ''}
             </div>
             <div style="font-size:13px;color:#262626;line-height:1.5;word-break:break-word;">${escapeHtml(node.text)}</div>
@@ -196,8 +257,14 @@ function buildThreadedHtml(comments, post, isUnlocked) {
       </div>`;
   }
 
-  const commentsHtml = roots.map(r => renderComment(r)).join('');
-  const exportedAt = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const commentsHtml = roots.map((r) => renderComment(r)).join('');
+  const exportedAt = new Date().toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
   return `<!DOCTYPE html>
 <html>
@@ -216,30 +283,34 @@ function buildThreadedHtml(comments, post, isUnlocked) {
 </head>
 <body>
   <div class="header">
-    <div style="font-size:16px;font-weight:800;color:#262626;">📋 Comment Archive</div>
+    <div style="font-size:16px;font-weight:800;color:#262626;">Comment Archive</div>
     <div class="post-caption">${escapeHtml((post.caption || 'No caption').substring(0, 300))}${(post.caption || '').length > 300 ? '...' : ''}</div>
     <div class="meta">
-      <span>💬 ${comments.length.toLocaleString()} comments${!isUnlocked ? ' (free preview)' : ''}</span>
-      <span>🕐 Exported: ${exportedAt}</span>
-      ${post.permalink ? `<span>🔗 ${post.permalink}</span>` : ''}
+      <span>${comments.length.toLocaleString()} comments${!isUnlocked ? ' (free preview)' : ''}</span>
+      <span>Exported: ${escapeHtml(exportedAt)}</span>
+      ${post.permalink ? `<span>${escapeHtml(post.permalink)}</span>` : ''}
     </div>
   </div>
-  ${!isUnlocked ? '<div class="paywall-note">⚠️ This is a free preview showing the first 500 comments. Upgrade to Pro at commentexport.vercel.app for the full archive.</div>' : ''}
+  ${!isUnlocked ? '<div class="paywall-note">This is a free preview showing the first 500 comments. Upgrade to Pro for the full archive.</div>' : ''}
   <div class="comments">${commentsHtml}</div>
-  <div class="watermark">Generated by CommentExport · commentexport.vercel.app</div>
+  <div class="watermark">Generated by CommentExport</div>
 </body>
 </html>`;
 }
 
 function stringToColor(str) {
-  const colors = ['#7c3aed','#db2777','#0891b2','#059669','#d97706','#dc2626','#7c3aed','#2563eb'];
+  const colors = ['#7c3aed', '#db2777', '#0891b2', '#059669', '#d97706', '#dc2626', '#2563eb'];
   let hash = 0;
-  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+
   return colors[Math.abs(hash) % colors.length];
 }
 
-function escapeHtml(text) {
-  return (text || '')
+function escapeHtml(value) {
+  return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
