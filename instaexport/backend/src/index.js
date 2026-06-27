@@ -16,6 +16,26 @@ const app = express();
 app.set('trust proxy', 1); // Required for Railway/Vercel proxy
 const PORT = process.env.PORT || 3001;
 
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'https://commentexport.vercel.app',
+  'http://localhost:3000',
+].filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.warn('[CORS] Blocked origin:', origin);
+    return callback(new Error(`CORS blocked origin: ${origin}`));
+  },
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+}));
+
 // ── Security ──────────────────────────────────
 app.use(helmet());
 app.use(cors({
