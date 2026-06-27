@@ -31,9 +31,5 @@
   },
   "deploy": {
     "startCommand": "node src/index.js",
-    "variables": {
-      "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true",
-      "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium"
-    }
   }
 }
