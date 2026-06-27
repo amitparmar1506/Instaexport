@@ -80,9 +80,15 @@ router.get('/csv/:postId', authMiddleware, async (req, res) => {
 
     csvStream.end();
 
+    // Update export count
+    const { data: currentUser } = await supabase
+      .from('users')
+      .select('total_comments_exported')
+      .eq('id', req.user.userId)
+      .single();
     await supabase
       .from('users')
-      .update({ total_comments_exported: supabase.raw('total_comments_exported + ' + comments.length) })
+      .update({ total_comments_exported: (currentUser?.total_comments_exported || 0) + comments.length })
       .eq('id', req.user.userId);
 
   } catch (err) {
