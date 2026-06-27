@@ -135,16 +135,15 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
 
     const threadedHtml = buildThreadedHtml(comments, access.post, access.isUnlocked);
 
-    browser = await puppeteer.launch({
-      headless: 'new',
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    });
+   browser = await puppeteer.launch({
+  headless: 'new',
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+  ],
+});
 
     const page = await browser.newPage();
     await page.setContent(threadedHtml, { waitUntil: 'networkidle0' });
