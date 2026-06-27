@@ -269,8 +269,6 @@ export default function PostDetailPage() {
   );
 }
 
-disabled={!!isExporting || !!isIngesting}
-
 // Comment card component
 const AVATAR_COLORS = ['#7C3AED','#DB2777','#0891B2','#059669','#D97706','#DC2626','#2563EB','#7C3AED'];
 
