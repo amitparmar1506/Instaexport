@@ -46,6 +46,19 @@ app.use(cors({
 app.use(express.json());
 
 // ── Rate limiting ──────────────────────────────
+
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+
+  res.on('finish', () => {
+    console.log(
+      `[HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - startedAt}ms origin=${req.headers.origin || '-'}`
+    );
+  });
+
+  next();
+});
+
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
