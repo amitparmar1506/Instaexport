@@ -44,7 +44,7 @@ async function processCommentIngestion(job) {
       const batchLimit = Math.min(BATCH_SIZE, hardLimit - processedCount);
 
       const params = {
-        fields: 'id,text,like_count,timestamp,username,from,replies{id,text,like_count,timestamp,username,from}',
+        fields: 'id,text,like_count,timestamp,username,from{id,username},replies{id,text,like_count,timestamp,username,from{id,username}}',
         limit: batchLimit,
         access_token: accessToken,
       };
@@ -96,7 +96,7 @@ async function processCommentIngestion(job) {
           let actualReplies = comment.replies.data;
           try {
             const repliesRes = await axios.get(`${IG_GRAPH_URL}/${comment.id}/replies`, {
-              params: { fields: 'id,text,like_count,timestamp,username,from', access_token: accessToken, limit: 50 }
+              params: { fields: 'id,text,like_count,timestamp,username,from{id,username}', access_token: accessToken, limit: 50 }
             });
             if (repliesRes.data?.data) actualReplies = repliesRes.data.data;
           } catch (err) {
@@ -125,7 +125,8 @@ async function processCommentIngestion(job) {
         if (replyErr) console.error('[Worker] Reply batch upsert error:', replyErr.message);
       }
 
-      processedCount += rootComments.length + replyUpserts.length;
+      const { count: actualCount } = await supabase.from('comments').select('id', { count: 'exact', head: true }).eq('post_id', postId);
+      processedCount = actualCount || (processedCount + rootComments.length + replyUpserts.length);
 
       await supabase
         .from('export_jobs')
