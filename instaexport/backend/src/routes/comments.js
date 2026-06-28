@@ -8,7 +8,7 @@ const FREE_COMMENT_LIMIT = 500;
 
 // ── POST /api/comments/ingest ──────────────────
 router.post('/ingest', authMiddleware, async (req, res) => {
-  const { postId } = req.body;
+  const { postId, deltaSync } = req.body;
   if (!postId) return res.status(400).json({ error: 'postId required' });
 
   try {
@@ -54,7 +54,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
       .limit(1)
       .maybeSingle();
 
-    if (existingJob?.status === 'completed') {
+    if (existingJob?.status === 'completed' && !deltaSync) {
       return res.json({
         jobId: existingJob.id,
         status: 'completed',
@@ -98,6 +98,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
       postId,
       instagramMediaId: post.instagram_media_id,
       limit,
+      deltaSync: !!deltaSync,
     });
 
     console.log(`[Comments] Enqueued job ${job.id} for post ${post.instagram_media_id}`);
