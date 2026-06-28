@@ -22,7 +22,8 @@
     "razorpay": "^2.9.2",
     "uuid": "^9.0.0",
     "fast-csv": "^5.0.1",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
