@@ -1,13 +1,13 @@
-const axios = require('axios');
 const supabase = require('../db/supabase');
+const axios = require('axios');
 
 // New Instagram Graph API 2024
 const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
 const BATCH_SIZE = 50;
 
 async function processCommentIngestion(job) {
-  const { jobId, userId, postId, instagramMediaId, limit } = job.data;
-  console.log(`[Worker] Starting job ${jobId} for post ${instagramMediaId}`);
+  const { jobId, userId, postId, instagramMediaId, limit, deltaSync } = job.data;
+  console.log(`[Worker] Starting job ${jobId} for post ${instagramMediaId} (Delta: ${!!deltaSync})`);
 
   try {
     await updateJobStatus(jobId, 'running');
@@ -66,32 +66,56 @@ async function processCommentIngestion(job) {
 
       if (rootComments.length === 0) break;
 
-      for (const comment of rootComments) {
-        const commentDbId = await upsertComment(postId, {
-          instagram_comment_id: comment.id,
-          commenter_username: comment.username || comment.from?.username || 'unknown',
-          text: comment.text,
-          like_count: comment.like_count || 0,
-          parent_id: null,
-          depth: 0,
-          instagram_timestamp: comment.timestamp,
-        });
+      const rootUpserts = rootComments.map(comment => ({
+        post_id: postId,
+        instagram_comment_id: comment.id,
+        commenter_username: comment.username || comment.from?.username || 'unknown',
+        text: comment.text,
+        like_count: comment.like_count || 0,
+        parent_id: null,
+        depth: 0,
+        instagram_timestamp: comment.timestamp,
+      }));
 
+      const { data: savedRoots, error: rootErr } = await supabase
+        .from('comments')
+        .upsert(rootUpserts, { onConflict: 'post_id,instagram_comment_id' })
+        .select('id, instagram_comment_id');
+
+      if (rootErr) {
+        console.error('[Worker] Root batch upsert error:', rootErr.message);
+        throw new Error(rootErr.message);
+      }
+
+      const rootIdMap = {};
+      savedRoots.forEach(r => { rootIdMap[r.instagram_comment_id] = r.id; });
+
+      const replyUpserts = [];
+      for (const comment of rootComments) {
         if (comment.replies?.data?.length > 0) {
           for (const reply of comment.replies.data) {
-            await upsertComment(postId, {
+            replyUpserts.push({
+              post_id: postId,
               instagram_comment_id: reply.id,
               commenter_username: reply.username || reply.from?.username || 'unknown',
               text: reply.text,
               like_count: reply.like_count || 0,
-              parent_id: commentDbId,
+              parent_id: rootIdMap[comment.id],
               depth: 1,
               instagram_timestamp: reply.timestamp,
             });
           }
         }
-        processedCount++;
       }
+
+      if (replyUpserts.length > 0) {
+        const { error: replyErr } = await supabase
+          .from('comments')
+          .upsert(replyUpserts, { onConflict: 'post_id,instagram_comment_id' });
+        if (replyErr) console.error('[Worker] Reply batch upsert error:', replyErr.message);
+      }
+
+      processedCount += rootComments.length + replyUpserts.length;
 
       await supabase
         .from('export_jobs')
