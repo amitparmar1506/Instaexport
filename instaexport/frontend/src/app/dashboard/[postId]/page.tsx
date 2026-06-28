@@ -7,7 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { postsApi, commentsApi, exportApi } from '@/lib/api';
 import { useJobProgress } from '@/hooks/useJobProgress';
 import {
-  ArrowLeft, Download, FileText, Search,
+  ArrowLeft, Download, FileText, Search, Package,
   MessageCircle, Users, BarChart3, Crown,
   Loader2, ChevronDown, ChevronRight,
   Heart, Clock, Film, Image as ImageIcon,
@@ -24,7 +24,7 @@ export default function PostDetailPage() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showAnalytics, setShowAnalytics] = useState(false);
-  const [isExporting, setIsExporting] = useState<'csv' | 'pdf' | null>(null);
+  const [isExporting, setIsExporting] = useState<'csv' | 'pdf' | 'ucp' | null>(null);
   const [page, setPage] = useState(1);
   const [expandedReplies, setExpandedReplies] = useState<Set<string>>(new Set());
   const [replies, setReplies] = useState<Record<string, any[]>>({});
@@ -79,7 +79,8 @@ export default function PostDetailPage() {
     setIsExporting(type);
     try {
       if (type === 'csv') await exportApi.downloadCsv(postId);
-      else await exportApi.downloadPdf(postId);
+      else if (type === 'pdf') await exportApi.downloadPdf(postId);
+      else if (type === 'ucp') await exportApi.downloadUcp(postId);
     } catch (e: any) {
       if (e.message?.includes('402') || e.message?.includes('Payment')) setShowUpgrade(true);
       else alert(e.message || 'Export failed. Please try again.');
@@ -152,6 +153,15 @@ export default function PostDetailPage() {
             <FileText className="w-4 h-4 text-purple-500" />
             {isExporting === 'pdf' ? 'Generating PDF...' : 'Download PDF'}
             {!isPro && <span className="ml-auto text-xs text-amber-500 font-normal">500 limit</span>}
+          </button>
+          <button
+            onClick={() => handleExport('ucp')}
+            disabled={!!isExporting || !!isIngesting}
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 bg-gray-50 hover:bg-gray-100 rounded-xl text-sm font-medium text-gray-700 transition-colors disabled:opacity-50"
+          >
+            <Package className="w-4 h-4 text-green-500" />
+            {isExporting === 'ucp' ? 'Building package...' : 'Download .ucp'}
+            <span className="ml-auto text-xs text-green-600 font-normal">New</span>
           </button>
           {!isPro && (
             <button
