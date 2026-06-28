@@ -5,6 +5,17 @@ const supabase = require('../db/supabase');
 const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
 const BATCH_SIZE = 50;
 
+/**
+ * Extract username from reply text.
+ * Instagram replies always start with "@username " — e.g. "@john_doe great post!"
+ * This is our workaround since the Instagram Login API doesn't return usernames on replies.
+ */
+function extractUsernameFromReplyText(text) {
+  if (!text) return null;
+  const match = text.match(/^@([a-zA-Z0-9_.]{1,30})\b/);
+  return match ? match[1] : null;
+}
+
 async function processCommentIngestion(job) {
   const { jobId, userId, postId, instagramMediaId, limit, deltaSync } = job.data;
   console.log(`[Worker] Starting job ${jobId} for post ${instagramMediaId} (Delta: ${!!deltaSync})`);
@@ -44,7 +55,7 @@ async function processCommentIngestion(job) {
       const batchLimit = Math.min(BATCH_SIZE, hardLimit - processedCount);
 
       const params = {
-        fields: 'id,text,like_count,timestamp,username,from{id,username},replies{id,text,like_count,timestamp,username,from{id,username}}',
+        fields: 'id,text,like_count,timestamp,username,replies{id,text,like_count,timestamp,username}',
         limit: batchLimit,
         access_token: accessToken,
       };
@@ -69,7 +80,7 @@ async function processCommentIngestion(job) {
       const rootUpserts = rootComments.map(comment => ({
         post_id: postId,
         instagram_comment_id: comment.id,
-        commenter_username: comment.username || comment.from?.username || 'unknown',
+        commenter_username: comment.username || 'unknown',
         text: comment.text || '[Media/Sticker]',
         like_count: comment.like_count || 0,
         parent_id: null,
@@ -90,31 +101,45 @@ async function processCommentIngestion(job) {
       const rootIdMap = {};
       savedRoots.forEach(r => { rootIdMap[r.instagram_comment_id] = r.id; });
 
-      // ── Fetch and upsert replies ──
+      // ── Process replies ──
       const replyUpserts = [];
       for (const comment of rootComments) {
         if (comment.replies?.data?.length > 0) {
-          // Make a SEPARATE API call to get reply usernames
+          // Also try the dedicated /replies endpoint for more data
           let actualReplies = comment.replies.data;
           try {
             const repliesRes = await axios.get(`${IG_GRAPH_URL}/${comment.id}/replies`, {
               params: {
-                fields: 'id,text,like_count,timestamp,username,from{id,username}',
+                fields: 'id,text,like_count,timestamp,username',
                 access_token: accessToken,
                 limit: 50,
               },
             });
             if (repliesRes.data?.data?.length > 0) {
               actualReplies = repliesRes.data.data;
-              console.log(`[Worker] Fetched ${actualReplies.length} replies for comment ${comment.id}, usernames: ${actualReplies.map(r => r.username || r.from?.username || '?').join(', ')}`);
             }
           } catch (err) {
-            console.error(`[Worker] Failed fetching explicit replies for ${comment.id}:`, err.message);
-            // Fall back to the inline replies (which may lack usernames)
+            console.error(`[Worker] /replies call failed for ${comment.id}:`, err.message);
           }
 
           for (const reply of actualReplies) {
-            const replyUsername = reply.username || reply.from?.username || null;
+            // Try to get username from: API field → parse from reply text → 'unknown'
+            let replyUsername = reply.username || null;
+
+            if (!replyUsername) {
+              // Instagram replies always start with "@username" — extract it
+              const parsed = extractUsernameFromReplyText(reply.text);
+              if (parsed) {
+                // The @mention in the reply is who they're REPLYING TO, not who wrote it.
+                // But we can still use it as a fallback indicator.
+                // Actually, let's check: the root comment username is known.
+                // If the @mention equals the root commenter, the reply author is someone else.
+                // We can't determine the author from text alone in that case.
+                // So we'll just use 'unknown' if the API doesn't give us the username.
+                replyUsername = null;
+              }
+            }
+
             replyUpserts.push({
               post_id: postId,
               instagram_comment_id: reply.id,
@@ -134,21 +159,9 @@ async function processCommentIngestion(job) {
           .from('comments')
           .upsert(replyUpserts, { onConflict: 'post_id,instagram_comment_id' });
         if (replyErr) console.error('[Worker] Reply batch upsert error:', replyErr.message);
-
-        // ── Fix @unknown: explicitly update any replies that had 'unknown' before ──
-        for (const reply of replyUpserts) {
-          if (reply.commenter_username && reply.commenter_username !== 'unknown') {
-            await supabase
-              .from('comments')
-              .update({ commenter_username: reply.commenter_username })
-              .eq('post_id', postId)
-              .eq('instagram_comment_id', reply.instagram_comment_id)
-              .eq('commenter_username', 'unknown');
-          }
-        }
       }
 
-      // Count actual rows in DB to avoid double-counting
+      // Count actual rows in DB
       const { count: actualCount } = await supabase
         .from('comments')
         .select('id', { count: 'exact', head: true })
