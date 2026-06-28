@@ -1,5 +1,5 @@
-const supabase = require('../db/supabase');
 const axios = require('axios');
+const supabase = require('../db/supabase');
 
 // New Instagram Graph API 2024
 const IG_GRAPH_URL = 'https://graph.instagram.com/v21.0';
@@ -134,7 +134,7 @@ async function processCommentIngestion(job) {
     if (processedCount < hardLimit || limit === null) {
       await updateJobStatus(jobId, 'completed', { processed_comments: processedCount, progress: 100 });
       await computeAnalytics(postId);
-      console.log(`[Worker] Job ${jobId} completed — ${processedCount} comments`);
+      console.log(`[Worker] Job ${jobId} completed â€” ${processedCount} comments`);
     }
 
   } catch (err) {
