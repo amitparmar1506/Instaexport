@@ -1,19 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
-import { postsApi, commentsApi, exportApi } from '@/lib/api';
+import { commentsApi, postsApi, exportApi } from '@/lib/api';
+import { ArrowLeft, MessageCircle, Heart, Download, FileText, Loader2, ChevronDown, ChevronRight, Crown, Search, BarChart3, Image as ImageIcon, Package, RefreshCw } from 'lucide-react';
 import { useJobProgress } from '@/hooks/useJobProgress';
-import {
-  ArrowLeft, Download, FileText, Search, Package,
-  MessageCircle, Users, BarChart3, Crown,
-  Loader2, ChevronDown, ChevronRight,
-  Heart, Clock, Film, Image as ImageIcon,
-  ExternalLink, RefreshCw
-} from 'lucide-react';
-import UpgradeModal from '@/components/dashboard/UpgradeModal';
+import UpgradeModal from '@/components/payments/UpgradeModal';
 import AnalyticsPanel from '@/components/comments/AnalyticsPanel';
 
 export default function PostDetailPage() {
@@ -61,17 +55,14 @@ export default function PostDetailPage() {
     if (job?.status === 'paused') setShowUpgrade(true);
   }, [job?.status]);
 
-    const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
-    setIsExporting(type);
+  const handleDeltaSync = async () => {
+    if (isIngesting) return;
     try {
-      if (type === 'csv') await exportApi.downloadCsv(postId);
-      else if (type === 'pdf') await exportApi.downloadPdf(postId);
-      else if (type === 'ucp') await exportApi.downloadUcp(postId);
+      const res = await commentsApi.ingest(postId, true);
+      setJobId(res.jobId);
     } catch (e: any) {
-      if (e.message?.includes('402') || e.message?.includes('Payment')) setShowUpgrade(true);
-      else alert(e.message || 'Export failed. Please try again.');
+      console.error('Delta sync failed:', e);
     }
-    setIsExporting(null);
   };
 
   const toggleReplies = async (commentId: string) => {
@@ -88,7 +79,7 @@ export default function PostDetailPage() {
     setExpandedReplies(next);
   };
 
-  const handleExport = async (type: 'csv' | 'pdf') => {
+  const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
     setIsExporting(type);
     try {
       if (type === 'csv') await exportApi.downloadCsv(postId);
@@ -109,7 +100,7 @@ export default function PostDetailPage() {
   return (
     <div className="min-h-screen flex" style={{ background: '#F7F6F3' }}>
 
-      {/* â”€â”€ SIDEBAR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── SIDEBAR ─────────────────────── */}
       <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-100 fixed h-full z-20 flex flex-col">
         <div className="px-5 py-5 border-b border-gray-100">
           <button
@@ -201,7 +192,7 @@ export default function PostDetailPage() {
         </div>
       </aside>
 
-      {/* â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      {/* ── MAIN ────────────────────────── */}
       <main className="flex-1 ml-64">
         {/* Top bar */}
         <div className="bg-white border-b border-gray-100 px-8 py-4 sticky top-0 z-10">
@@ -230,7 +221,7 @@ export default function PostDetailPage() {
                 )}
                 {job?.status === 'paused' && (
                   <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
-                    â¸ Paused at free limit (500) Â· <button onClick={() => setShowUpgrade(true)} className="underline">Unlock more</button>
+                    ⏸ Paused at free limit (500) · <button onClick={() => setShowUpgrade(true)} className="underline">Unlock more</button>
                   </span>
                 )}
             </div>
