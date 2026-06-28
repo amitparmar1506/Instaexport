@@ -135,18 +135,20 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
 
     const threadedHtml = buildThreadedHtml(comments, access.post, access.isUnlocked);
 
-browser = await puppeteer.launch({
-  headless: 'new',
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage',
-    '--disable-gpu',
-  ],
-});
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+    });
 
     const page = await browser.newPage();
     await page.setContent(threadedHtml, { waitUntil: 'networkidle0' });
+    // Wait for emoji font to load
+    await page.evaluateHandle('document.fonts.ready');
 
     const pdfBuffer = await page.pdf({
       format: 'A4',
@@ -226,8 +228,12 @@ function buildThreadedHtml(comments, post, isUnlocked) {
 <head>
   <meta charset="UTF-8">
   <style>
+    @font-face {
+      font-family: 'Noto Color Emoji';
+      src: url('https://cdn.jsdelivr.net/npm/noto-color-emoji-font@1.0.0/NotoColorEmoji.ttf') format('truetype');
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #262626; background: #fff; font-size: 13px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Color Emoji', sans-serif; color: #262626; background: #fff; font-size: 13px; }
     .header { border-bottom: 2px solid #f0f0f0; padding: 16px 0; margin-bottom: 20px; }
     .post-caption { font-size: 13px; color: #262626; line-height: 1.6; margin-top: 6px; max-width: 600px; }
     .meta { font-size: 11px; color: #8e8e8e; margin-top: 6px; display: flex; gap: 16px; flex-wrap: wrap; }
