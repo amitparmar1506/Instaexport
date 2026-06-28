@@ -6,7 +6,7 @@ const { enqueueCommentIngestion } = require('../workers/queue');
 
 const FREE_COMMENT_LIMIT = 500;
 
-// â”€â”€ POST /api/comments/ingest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── POST /api/comments/ingest ──────────────────
 router.post('/ingest', authMiddleware, async (req, res) => {
   const { postId, deltaSync } = req.body;
   if (!postId) return res.status(400).json({ error: 'postId required' });
@@ -31,7 +31,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
 
     const isPro = user?.plan === 'pro' && (!user.pro_expires_at || new Date(user.pro_expires_at) > new Date());
 
-    // Check single-post purchase â€” use maybeSingle to avoid error when none exists
+    // Check single-post purchase
     const { data: purchase } = await supabase
       .from('purchases')
       .select('id')
@@ -54,7 +54,39 @@ router.post('/ingest', authMiddleware, async (req, res) => {
       .limit(1)
       .maybeSingle();
 
-    if (existingJob?.status === 'completed' && !deltaSync) {
+    // ── Delta sync: reset the existing job and re-run from scratch ──
+    if (deltaSync && existingJob) {
+      console.log(`[Comments] Delta sync requested for job ${existingJob.id}, resetting cursor`);
+      await supabase
+        .from('export_jobs')
+        .update({
+          status: 'pending',
+          next_cursor: null,        // CLEAR cursor so worker starts from the beginning
+          processed_comments: 0,
+          progress: 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingJob.id);
+
+      await enqueueCommentIngestion({
+        jobId: existingJob.id,
+        userId: req.user.userId,
+        postId,
+        instagramMediaId: post.instagram_media_id,
+        limit,
+        deltaSync: true,
+      });
+
+      return res.json({
+        jobId: existingJob.id,
+        status: 'pending',
+        total: post.comment_count || 0,
+        isUnlocked,
+      });
+    }
+
+    // ── Normal (non-delta) request: return cached result if completed ──
+    if (existingJob?.status === 'completed') {
       return res.json({
         jobId: existingJob.id,
         status: 'completed',
@@ -64,12 +96,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
       });
     }
 
-    if (deltaSync && existingJob) {
-      await supabase.from('export_jobs').update({ status: 'pending' }).eq('id', existingJob.id);
-      await enqueueCommentIngestion({ jobId: existingJob.id, userId: req.user.userId, postId, instagramMediaId: post.instagram_media_id, limit, deltaSync: true });
-      return res.json({ jobId: existingJob.id, status: 'pending', total: post.comment_count || 0, isUnlocked });
-    }
-
+    // ── Job is still running or pending ──
     if (existingJob?.status === 'running' || existingJob?.status === 'pending') {
       return res.json({
         jobId: existingJob.id,
@@ -80,7 +107,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
       });
     }
 
-    // Create new job
+    // ── No usable existing job: create a fresh one ──
     const { data: job, error: jobError } = await supabase
       .from('export_jobs')
       .insert({
@@ -104,7 +131,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
       postId,
       instagramMediaId: post.instagram_media_id,
       limit,
-      deltaSync: !!deltaSync,
+      deltaSync: false,
     });
 
     console.log(`[Comments] Enqueued job ${job.id} for post ${post.instagram_media_id}`);
@@ -123,7 +150,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
   }
 });
 
-// â”€â”€ GET /api/comments/:postId â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GET /api/comments/:postId ──────────────────
 router.get('/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const { page = 1, limit = 50, search, parentId } = req.query;
@@ -206,7 +233,7 @@ router.get('/:postId', authMiddleware, async (req, res) => {
   }
 });
 
-// â”€â”€ GET /api/comments/:postId/analytics â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GET /api/comments/:postId/analytics ────────
 router.get('/:postId/analytics', authMiddleware, async (req, res) => {
   const { postId } = req.params;
 
