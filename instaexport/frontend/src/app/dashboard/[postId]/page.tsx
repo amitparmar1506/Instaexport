@@ -106,7 +106,7 @@ export default function PostDetailPage() {
   return (
     <div className="min-h-screen flex" style={{ background: '#F7F6F3' }}>
 
-      {/* ── SIDEBAR ─────────────────────── */}
+      {/* â”€â”€ SIDEBAR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-100 fixed h-full z-20 flex flex-col">
         <div className="px-5 py-5 border-b border-gray-100">
           <button
@@ -198,7 +198,7 @@ export default function PostDetailPage() {
         </div>
       </aside>
 
-      {/* ── MAIN ────────────────────────── */}
+      {/* â”€â”€ MAIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <main className="flex-1 ml-64">
         {/* Top bar */}
         <div className="bg-white border-b border-gray-100 px-8 py-4 sticky top-0 z-10">
@@ -227,10 +227,9 @@ export default function PostDetailPage() {
                 )}
                 {job?.status === 'paused' && (
                   <span className="text-xs text-amber-600 font-medium flex items-center gap-1">
-                    ⏸ Paused at free limit (500) · <button onClick={() => setShowUpgrade(true)} className="underline">Unlock more</button>
+                    â¸ Paused at free limit (500) Â· <button onClick={() => setShowUpgrade(true)} className="underline">Unlock more</button>
                   </span>
                 )}
-              </div>
             </div>
           </div>
         </div>
