@@ -61,18 +61,17 @@ export default function PostDetailPage() {
     if (job?.status === 'paused') setShowUpgrade(true);
   }, [job?.status]);
 
-  -  const handleExport = async (type: 'csv' | 'pdf') => {
-+  const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
-     setIsExporting(type);
-     try {
-       if (type === 'csv') await exportApi.downloadCsv(postId);
-    if (isIngesting) return;
+    const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
+    setIsExporting(type);
     try {
-      const res = await commentsApi.ingest(postId, true);
-      setJobId(res.jobId);
+      if (type === 'csv') await exportApi.downloadCsv(postId);
+      else if (type === 'pdf') await exportApi.downloadPdf(postId);
+      else if (type === 'ucp') await exportApi.downloadUcp(postId);
     } catch (e: any) {
-      console.error('Delta sync failed:', e);
+      if (e.message?.includes('402') || e.message?.includes('Payment')) setShowUpgrade(true);
+      else alert(e.message || 'Export failed. Please try again.');
     }
+    setIsExporting(null);
   };
 
   const toggleReplies = async (commentId: string) => {
