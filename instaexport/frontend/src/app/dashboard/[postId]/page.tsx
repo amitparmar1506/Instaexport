@@ -61,6 +61,16 @@ export default function PostDetailPage() {
     if (job?.status === 'paused') setShowUpgrade(true);
   }, [job?.status]);
 
+  const handleDeltaSync = async () => {
+    if (isIngesting) return;
+    try {
+      const res = await commentsApi.ingest(postId, true);
+      setJobId(res.jobId);
+    } catch (e: any) {
+      console.error('Delta sync failed:', e);
+    }
+  };
+
   const toggleReplies = async (commentId: string) => {
     const next = new Set(expandedReplies);
     if (next.has(commentId)) {
@@ -75,7 +85,7 @@ export default function PostDetailPage() {
     setExpandedReplies(next);
   };
 
-  const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
+  const handleExport = async (type: 'csv' | 'pdf') => {
     setIsExporting(type);
     try {
       if (type === 'csv') await exportApi.downloadCsv(postId);
@@ -193,8 +203,17 @@ export default function PostDetailPage() {
         {/* Top bar */}
         <div className="bg-white border-b border-gray-100 px-8 py-4 sticky top-0 z-10">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="flex items-center gap-3">
               <h1 className="font-bold text-gray-900">Comment Viewer</h1>
+              <button
+                onClick={handleDeltaSync}
+                disabled={!!isIngesting}
+                className="p-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors disabled:opacity-50"
+                title="Fetch latest comments"
+              >
+                <RefreshCw className={`w-4 h-4 ${isIngesting ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
               <div className="flex items-center gap-3 mt-0.5">
                 <span className="text-xs text-gray-500">{total.toLocaleString()} comments loaded</span>
                 {isIngesting && (
