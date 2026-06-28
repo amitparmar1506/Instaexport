@@ -6,7 +6,7 @@ const { enqueueCommentIngestion } = require('../workers/queue');
 
 const FREE_COMMENT_LIMIT = 500;
 
-// ── POST /api/comments/ingest ──────────────────
+// â”€â”€ POST /api/comments/ingest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.post('/ingest', authMiddleware, async (req, res) => {
   const { postId, deltaSync } = req.body;
   if (!postId) return res.status(400).json({ error: 'postId required' });
@@ -31,7 +31,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
 
     const isPro = user?.plan === 'pro' && (!user.pro_expires_at || new Date(user.pro_expires_at) > new Date());
 
-    // Check single-post purchase — use maybeSingle to avoid error when none exists
+    // Check single-post purchase â€” use maybeSingle to avoid error when none exists
     const { data: purchase } = await supabase
       .from('purchases')
       .select('id')
@@ -62,6 +62,12 @@ router.post('/ingest', authMiddleware, async (req, res) => {
         isUnlocked,
         hitPaywall: !isUnlocked && existingJob.processed_comments >= FREE_COMMENT_LIMIT,
       });
+    }
+
+    if (deltaSync && existingJob) {
+      await supabase.from('export_jobs').update({ status: 'pending' }).eq('id', existingJob.id);
+      await enqueueCommentIngestion({ jobId: existingJob.id, userId: req.user.userId, postId, instagramMediaId: post.instagram_media_id, limit, deltaSync: true });
+      return res.json({ jobId: existingJob.id, status: 'pending', total: post.comment_count || 0, isUnlocked });
     }
 
     if (existingJob?.status === 'running' || existingJob?.status === 'pending') {
@@ -117,7 +123,7 @@ router.post('/ingest', authMiddleware, async (req, res) => {
   }
 });
 
-// ── GET /api/comments/:postId ──────────────────
+// â”€â”€ GET /api/comments/:postId â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const { page = 1, limit = 50, search, parentId } = req.query;
@@ -200,7 +206,7 @@ router.get('/:postId', authMiddleware, async (req, res) => {
   }
 });
 
-// ── GET /api/comments/:postId/analytics ────────
+// â”€â”€ GET /api/comments/:postId/analytics â”€â”€â”€â”€â”€â”€â”€â”€
 router.get('/:postId/analytics', authMiddleware, async (req, res) => {
   const { postId } = req.params;
 
