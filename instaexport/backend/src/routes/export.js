@@ -1,4 +1,5 @@
 const express = require('express');
+const { buildUCPPackage } = require('../utils/ucpExporter');
 const { format } = require('fast-csv');
 const router = express.Router();
 const supabase = require('../db/supabase');
@@ -166,7 +167,7 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
     console.log('[PDF] Launching browser...');
     browser = await puppeteer.launch(launchOptions);
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 60000 });
     await page.evaluateHandle('document.fonts.ready');
 
     const pdfBuffer = await page.pdf({
@@ -240,7 +241,7 @@ function buildInstagramHTML(comments, post, isUnlocked) {
       </div>
       <!-- Content -->
       <div style="flex:1;min-width:0;">
-        <div style="font-size:${fontSize}px;line-height:1.5;color:#262626;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;">
+        <div style="font-size:${fontSize}px;line-height:1.5;color:#262626;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;">
           <span style="font-weight:600;margin-right:4px;">${escapeHtml(username)}</span><span style="white-space:pre-wrap;">${escapeHtml(node.text)}</span>
         </div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;font-size:12px;color:#8E8E8E;font-family:system-ui;">
@@ -268,13 +269,16 @@ function buildInstagramHTML(comments, post, isUnlocked) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: #FAFAFA;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #FFFFFF;
     color: #262626;
     padding: 0;
+    -webkit-font-smoothing: antialiased;
   }
 
   /* IG-style header */
@@ -421,5 +425,48 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+// ── GET /api/export/ucp/:postId ───────────────
+router.get('/ucp/:postId', authMiddleware, async (req, res) => {
+  const { postId } = req.params;
+  const access = await checkAccess(req.user.userId, postId);
+  if (access.error) return res.status(access.status).json({ error: access.error });
+
+  try {
+    let query = supabase
+      .from('comments')
+      .select('*')
+      .eq('post_id', postId)
+      .order('depth', { ascending: true })
+      .order('instagram_timestamp', { ascending: true });
+
+    if (!access.isUnlocked) query = query.limit(500);
+
+    const { data: comments, error: commentsError } = await query;
+    if (commentsError) throw new Error(commentsError.message);
+    if (!comments?.length) return res.status(409).json({ error: 'No comments yet. Please sync first.' });
+
+    // Get user data for package metadata
+    const { data: user } = await supabase
+      .from('users')
+      .select('id, username, instagram_user_id')
+      .eq('id', req.user.userId)
+      .single();
+
+    console.log(`[Export] Building UCP package for post ${postId} with ${comments.length} comments`);
+
+    const ucpBuffer = await buildUCPPackage(comments, access.post, user, access.isUnlocked);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="comments_${postId}.ucp"`);
+    res.send(ucpBuffer);
+
+    console.log(`[Export] UCP package sent: ${ucpBuffer.length} bytes`);
+
+  } catch (err) {
+    console.error('[Export] UCP error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'UCP export failed', detail: err.message });
+  }
+});
 
 module.exports = router;
