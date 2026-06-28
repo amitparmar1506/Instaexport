@@ -44,7 +44,7 @@ async function processCommentIngestion(job) {
       const batchLimit = Math.min(BATCH_SIZE, hardLimit - processedCount);
 
       const params = {
-        fields: 'id,text,like_count,timestamp,username,replies{id,text,like_count,timestamp,username}',
+        fields: 'id,text,like_count,timestamp,username,from,replies{id,text,like_count,timestamp,username,from}',
         limit: batchLimit,
         access_token: accessToken,
       };
@@ -69,7 +69,7 @@ async function processCommentIngestion(job) {
       for (const comment of rootComments) {
         const commentDbId = await upsertComment(postId, {
           instagram_comment_id: comment.id,
-          commenter_username: comment.username,
+          commenter_username: comment.username || comment.from?.username || 'unknown',
           text: comment.text,
           like_count: comment.like_count || 0,
           parent_id: null,
@@ -81,7 +81,7 @@ async function processCommentIngestion(job) {
           for (const reply of comment.replies.data) {
             await upsertComment(postId, {
               instagram_comment_id: reply.id,
-              commenter_username: reply.username,
+              commenter_username: reply.username || reply.from?.username || 'unknown',
               text: reply.text,
               like_count: reply.like_count || 0,
               parent_id: commentDbId,
