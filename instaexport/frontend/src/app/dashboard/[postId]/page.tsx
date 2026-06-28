@@ -61,7 +61,11 @@ export default function PostDetailPage() {
     if (job?.status === 'paused') setShowUpgrade(true);
   }, [job?.status]);
 
-  const handleDeltaSync = async () => {
+  -  const handleExport = async (type: 'csv' | 'pdf') => {
++  const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
+     setIsExporting(type);
+     try {
+       if (type === 'csv') await exportApi.downloadCsv(postId);
     if (isIngesting) return;
     try {
       const res = await commentsApi.ingest(postId, true);
