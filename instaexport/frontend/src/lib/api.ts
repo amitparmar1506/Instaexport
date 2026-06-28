@@ -38,9 +38,11 @@ export const postsApi = {
   get: (id: string) => api.get(`/api/posts/${id}`).then(r => r.data),
 };
 
-export const commentsApi = {
-  ingest: (postId: string) => api.post('/api/comments/ingest', { postId }).then(r => r.data),
-  list: (postId: string, params?: Record<string, any>) =>
+ // ── Comments ──────────────────────────────────
+ export const commentsApi = {
+-  ingest: (postId: string) => api.post('/api/comments/ingest', { postId }).then(r => r.data),
++  ingest: (postId: string, deltaSync = false) => api.post('/api/comments/ingest', { postId, deltaSync }).then(r => r.data),
+   list: (postId: string, params?: Record<string, any>) =>
     api.get(`/api/comments/${postId}`, { params }).then(r => r.data),
   replies: (postId: string, parentId: string) =>
     api.get(`/api/comments/${postId}`, { params: { parentId } }).then(r => r.data),
