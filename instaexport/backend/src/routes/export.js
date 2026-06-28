@@ -26,7 +26,6 @@ function findChromium() {
     } catch {}
   }
 
-  // Try to find via which command
   try {
     const path = execSync('which chromium || which chromium-browser || which google-chrome', { encoding: 'utf8' }).trim();
     if (path) {
@@ -67,7 +66,7 @@ async function checkAccess(userId, postId) {
   return { post, isUnlocked: isPro || !!purchase, isPro };
 }
 
-// â”€â”€ GET /api/export/csv/:postId â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GET /api/export/csv/:postId ────────────────
 router.get('/csv/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const access = await checkAccess(req.user.userId, postId);
@@ -108,7 +107,6 @@ router.get('/csv/:postId', authMiddleware, async (req, res) => {
     }
     csvStream.end();
 
-    // Update export count
     const { data: currentUser } = await supabase
       .from('users').select('total_comments_exported').eq('id', req.user.userId).single();
     await supabase
@@ -122,7 +120,7 @@ router.get('/csv/:postId', authMiddleware, async (req, res) => {
   }
 });
 
-// â”€â”€ GET /api/export/pdf/:postId â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GET /api/export/pdf/:postId ────────────────
 router.get('/pdf/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const access = await checkAccess(req.user.userId, postId);
@@ -190,9 +188,23 @@ router.get('/pdf/:postId', authMiddleware, async (req, res) => {
   }
 });
 
-// â”€â”€ Instagram-style HTML builder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Server-side emoji to Twemoji SVG replacement ──
+function emojifyText(text) {
+  // Match most emoji: emoji presentation sequences, ZWJ sequences, keycap, flags
+  const emojiRegex = /(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})(?:\uFE0F?\u200D(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}))*/gu;
+
+  return text.replace(emojiRegex, (match) => {
+    const codePoints = [...match]
+      .map(c => c.codePointAt(0))
+      .filter(cp => cp !== 0xFE0F) // strip variation selector-16
+      .map(cp => cp.toString(16))
+      .join('-');
+    return `<img src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/${codePoints}.svg" alt="${match}" style="height:1.1em;width:1.1em;vertical-align:-0.15em;display:inline;margin:0 .05em;">`;
+  });
+}
+
+// ── Instagram-style HTML builder ───────────────
 function buildInstagramHTML(comments, post, isUnlocked) {
-  // Build tree
   const tree = {};
   const roots = [];
   comments.forEach(c => { tree[c.id] = { ...c, children: [] }; });
@@ -232,17 +244,18 @@ function buildInstagramHTML(comments, post, isUnlocked) {
     const fontSize = depth === 0 ? 14 : 13;
     const marginLeft = depth * 44;
 
+    // Apply emoji replacement AFTER HTML-escaping the text
+    const safeText = emojifyText(escapeHtml(node.text));
+
     return `
     <div style="display:flex;gap:10px;margin-bottom:16px;margin-left:${marginLeft}px;position:relative;">
       ${depth > 0 ? `<div style="position:absolute;left:-22px;top:0;bottom:0;width:1px;background:#DBDBDB;"></div>` : ''}
-      <!-- Avatar -->
       <div style="width:${avatarSize}px;height:${avatarSize}px;border-radius:50%;background:linear-gradient(135deg,${color},${color}CC);display:flex;align-items:center;justify-content:center;color:white;font-size:${depth === 0 ? 13 : 10}px;font-weight:700;flex-shrink:0;font-family:system-ui;">
         ${initial}
       </div>
-      <!-- Content -->
       <div style="flex:1;min-width:0;">
         <div style="font-size:${fontSize}px;line-height:1.5;color:#262626;font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;">
-          <span style="font-weight:600;margin-right:4px;">${escapeHtml(username)}</span><span style="white-space:pre-wrap;">${escapeHtml(node.text)}</span>
+          <span style="font-weight:600;margin-right:4px;">${escapeHtml(username)}</span><span style="white-space:pre-wrap;">${safeText}</span>
         </div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:4px;font-size:12px;color:#8E8E8E;font-family:system-ui;">
           <span>${date}</span>
@@ -250,7 +263,6 @@ function buildInstagramHTML(comments, post, isUnlocked) {
           ${node.children.length > 0 ? `<span style="font-weight:600;">Reply</span>` : ''}
         </div>
       </div>
-      <!-- Heart icon -->
       <div style="flex-shrink:0;padding-top:4px;">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="${isOwnerLiked ? '#ED4956' : 'none'}" stroke="${isOwnerLiked ? '#ED4956' : '#8E8E8E'}" stroke-width="2">
           <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
@@ -270,18 +282,16 @@ function buildInstagramHTML(comments, post, isUnlocked) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Color+Emoji&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: 'Inter', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     background: #FFFFFF;
     color: #262626;
     padding: 0;
     -webkit-font-smoothing: antialiased;
   }
-
-  /* IG-style header */
   .ig-header {
     background: white;
     border-bottom: 1px solid #DBDBDB;
@@ -293,25 +303,12 @@ function buildInstagramHTML(comments, post, isUnlocked) {
   }
   .ig-logo {
     font-size: 20px;
-    font-family: 'Billabong', cursive;
     background: linear-gradient(45deg, #833AB4, #E1306C, #F56040, #FCAF45);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     font-weight: 700;
     letter-spacing: -0.5px;
   }
-  .ig-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: #262626;
-  }
-  .ig-meta {
-    font-size: 12px;
-    color: #8E8E8E;
-    margin-top: 1px;
-  }
-
-  /* Post preview */
   .post-preview {
     background: white;
     border-bottom: 1px solid #DBDBDB;
@@ -322,17 +319,8 @@ function buildInstagramHTML(comments, post, isUnlocked) {
     color: #262626;
     line-height: 1.5;
   }
-  .post-caption strong {
-    font-weight: 600;
-    margin-right: 6px;
-  }
-  .post-url {
-    font-size: 12px;
-    color: #3897F0;
-    margin-top: 4px;
-  }
-
-  /* Comments section */
+  .post-caption strong { font-weight: 600; margin-right: 6px; }
+  .post-url { font-size: 12px; color: #3897F0; margin-top: 4px; }
   .comments-header {
     background: white;
     padding: 12px 16px 8px;
@@ -341,12 +329,7 @@ function buildInstagramHTML(comments, post, isUnlocked) {
     color: #262626;
     border-bottom: 1px solid #DBDBDB;
   }
-  .comments-list {
-    background: white;
-    padding: 12px 16px;
-  }
-
-  /* Free limit notice */
+  .comments-list { background: white; padding: 12px 16px; }
   .free-notice {
     background: #FFF3CD;
     border: 1px solid #FFEAA7;
@@ -355,8 +338,6 @@ function buildInstagramHTML(comments, post, isUnlocked) {
     color: #856404;
     text-align: center;
   }
-
-  /* Footer */
   .ig-footer {
     background: white;
     border-top: 1px solid #DBDBDB;
@@ -365,29 +346,18 @@ function buildInstagramHTML(comments, post, isUnlocked) {
     font-size: 11px;
     color: #8E8E8E;
   }
-
-  /* Divider between comments */
-  .comment-divider {
-    height: 1px;
-    background: #FAFAFA;
-    margin: 4px 0;
-  }
 </style>
 </head>
 <body>
 
-<!-- Instagram-style header -->
 <div class="ig-header">
-  <div>
-    <div class="ig-logo">CommentExport</div>
-  </div>
+  <div><div class="ig-logo">CommentExport</div></div>
   <div style="margin-left:auto;text-align:right;">
     <div style="font-size:11px;color:#8E8E8E;">Exported ${exportDate}</div>
-    <div style="font-size:11px;color:#8E8E8E;">${comments.length} comments${!isUnlocked ? ' Â· free preview' : ''}</div>
+    <div style="font-size:11px;color:#8E8E8E;">${comments.length} comments${!isUnlocked ? ' · free preview' : ''}</div>
   </div>
 </div>
 
-<!-- Post info -->
 <div class="post-preview">
   <div class="post-caption">
     <strong>${escapeHtml(post.caption?.split(' ')[0] || 'Post')}</strong>${escapeHtml((post.caption || '').substring(0, 200))}${(post.caption || '').length > 200 ? '...' : ''}
@@ -397,10 +367,9 @@ function buildInstagramHTML(comments, post, isUnlocked) {
 
 ${!isUnlocked ? `
 <div class="free-notice">
-  âš ï¸ Showing first 500 comments Â· <strong>Upgrade at commentexport.vercel.app</strong> for complete archive
+  Showing first 500 comments · <strong>Upgrade at commentexport.vercel.app</strong> for complete archive
 </div>` : ''}
 
-<!-- Comments -->
 <div class="comments-header">
   Comments <span style="color:#8E8E8E;font-weight:400;">(${comments.length.toLocaleString()})</span>
 </div>
@@ -409,9 +378,8 @@ ${!isUnlocked ? `
   ${commentsHTML}
 </div>
 
-<!-- Footer -->
 <div class="ig-footer">
-  Generated by <strong>CommentExport</strong> Â· commentexport.vercel.app Â· ${exportDate}
+  Generated by <strong>CommentExport</strong> · commentexport.vercel.app · ${exportDate}
 </div>
 
 </body>
@@ -426,7 +394,7 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
-// â”€â”€ GET /api/export/ucp/:postId â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── GET /api/export/ucp/:postId ───────────────
 router.get('/ucp/:postId', authMiddleware, async (req, res) => {
   const { postId } = req.params;
   const access = await checkAccess(req.user.userId, postId);
@@ -446,7 +414,6 @@ router.get('/ucp/:postId', authMiddleware, async (req, res) => {
     if (commentsError) throw new Error(commentsError.message);
     if (!comments?.length) return res.status(409).json({ error: 'No comments yet. Please sync first.' });
 
-    // Get user data for package metadata
     const { data: user } = await supabase
       .from('users')
       .select('id, username, instagram_user_id')
