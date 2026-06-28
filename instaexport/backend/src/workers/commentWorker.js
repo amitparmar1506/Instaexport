@@ -52,7 +52,6 @@ async function processCommentIngestion(job) {
 
       let response;
       try {
-        // New Instagram API endpoint for comments
         response = await axios.get(`${IG_GRAPH_URL}/${instagramMediaId}/comments`, { params });
       } catch (apiErr) {
         const errMsg = apiErr.response?.data?.error?.message || apiErr.message;
@@ -66,11 +65,12 @@ async function processCommentIngestion(job) {
 
       if (rootComments.length === 0) break;
 
+      // ── Upsert root comments ──
       const rootUpserts = rootComments.map(comment => ({
         post_id: postId,
         instagram_comment_id: comment.id,
         commenter_username: comment.username || comment.from?.username || 'unknown',
-        text: comment.text || '[Media/GIF]',
+        text: comment.text || '[Media/Sticker]',
         like_count: comment.like_count || 0,
         parent_id: null,
         depth: 0,
@@ -90,25 +90,36 @@ async function processCommentIngestion(job) {
       const rootIdMap = {};
       savedRoots.forEach(r => { rootIdMap[r.instagram_comment_id] = r.id; });
 
+      // ── Fetch and upsert replies ──
       const replyUpserts = [];
       for (const comment of rootComments) {
         if (comment.replies?.data?.length > 0) {
+          // Make a SEPARATE API call to get reply usernames
           let actualReplies = comment.replies.data;
           try {
             const repliesRes = await axios.get(`${IG_GRAPH_URL}/${comment.id}/replies`, {
-              params: { fields: 'id,text,like_count,timestamp,username,from{id,username}', access_token: accessToken, limit: 50 }
+              params: {
+                fields: 'id,text,like_count,timestamp,username,from{id,username}',
+                access_token: accessToken,
+                limit: 50,
+              },
             });
-            if (repliesRes.data?.data) actualReplies = repliesRes.data.data;
+            if (repliesRes.data?.data?.length > 0) {
+              actualReplies = repliesRes.data.data;
+              console.log(`[Worker] Fetched ${actualReplies.length} replies for comment ${comment.id}, usernames: ${actualReplies.map(r => r.username || r.from?.username || '?').join(', ')}`);
+            }
           } catch (err) {
-            console.error(`[Worker] Failed fetching explicit replies for ${comment.id}`, err.message);
+            console.error(`[Worker] Failed fetching explicit replies for ${comment.id}:`, err.message);
+            // Fall back to the inline replies (which may lack usernames)
           }
 
           for (const reply of actualReplies) {
+            const replyUsername = reply.username || reply.from?.username || null;
             replyUpserts.push({
               post_id: postId,
               instagram_comment_id: reply.id,
-              commenter_username: reply.username || reply.from?.username || 'unknown',
-              text: reply.text || '[Media/GIF]',
+              commenter_username: replyUsername || 'unknown',
+              text: reply.text || '[Media/Sticker]',
               like_count: reply.like_count || 0,
               parent_id: rootIdMap[comment.id],
               depth: 1,
@@ -123,10 +134,26 @@ async function processCommentIngestion(job) {
           .from('comments')
           .upsert(replyUpserts, { onConflict: 'post_id,instagram_comment_id' });
         if (replyErr) console.error('[Worker] Reply batch upsert error:', replyErr.message);
+
+        // ── Fix @unknown: explicitly update any replies that had 'unknown' before ──
+        for (const reply of replyUpserts) {
+          if (reply.commenter_username && reply.commenter_username !== 'unknown') {
+            await supabase
+              .from('comments')
+              .update({ commenter_username: reply.commenter_username })
+              .eq('post_id', postId)
+              .eq('instagram_comment_id', reply.instagram_comment_id)
+              .eq('commenter_username', 'unknown');
+          }
+        }
       }
 
-      const { count: actualCount } = await supabase.from('comments').select('id', { count: 'exact', head: true }).eq('post_id', postId);
-      processedCount = actualCount || (processedCount + rootComments.length + replyUpserts.length);
+      // Count actual rows in DB to avoid double-counting
+      const { count: actualCount } = await supabase
+        .from('comments')
+        .select('id', { count: 'exact', head: true })
+        .eq('post_id', postId);
+      processedCount = actualCount || processedCount;
 
       await supabase
         .from('export_jobs')
@@ -145,7 +172,7 @@ async function processCommentIngestion(job) {
     if (processedCount < hardLimit || limit === null) {
       await updateJobStatus(jobId, 'completed', { processed_comments: processedCount, progress: 100 });
       await computeAnalytics(postId);
-      console.log(`[Worker] Job ${jobId} completed â€” ${processedCount} comments`);
+      console.log(`[Worker] Job ${jobId} completed — ${processedCount} comments`);
     }
 
   } catch (err) {
@@ -153,26 +180,6 @@ async function processCommentIngestion(job) {
     await updateJobStatus(jobId, 'failed', { error_message: err.message });
     throw err;
   }
-}
-
-async function upsertComment(postId, data) {
-  const { data: comment, error } = await supabase
-    .from('comments')
-    .upsert({
-      post_id: postId,
-      instagram_comment_id: data.instagram_comment_id,
-      commenter_username: data.commenter_username,
-      text: data.text,
-      like_count: data.like_count,
-      parent_id: data.parent_id,
-      depth: data.depth,
-      instagram_timestamp: data.instagram_timestamp,
-    }, { onConflict: 'post_id,instagram_comment_id' })
-    .select('id')
-    .single();
-
-  if (error) { console.error('[Worker] Upsert error:', error.message); return null; }
-  return comment.id;
 }
 
 async function updateJobStatus(jobId, status, extra = {}) {
