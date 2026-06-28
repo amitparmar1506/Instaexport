@@ -7,7 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { commentsApi, postsApi, exportApi } from '@/lib/api';
 import { ArrowLeft, MessageCircle, Heart, Download, FileText, Loader2, ChevronDown, ChevronRight, Crown, Search, BarChart3, Image as ImageIcon, Package, RefreshCw } from 'lucide-react';
 import { useJobProgress } from '@/hooks/useJobProgress';
-import UpgradeModal from '@/components/payments/UpgradeModal';
+import UpgradeModal from '@/components/dashboard/UpgradeModal';
 import AnalyticsPanel from '@/components/comments/AnalyticsPanel';
 
 export default function PostDetailPage() {
