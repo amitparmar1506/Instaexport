@@ -75,7 +75,7 @@ export default function PostDetailPage() {
     setExpandedReplies(next);
   };
 
-  const handleExport = async (type: 'csv' | 'pdf') => {
+  const handleExport = async (type: 'csv' | 'pdf' | 'ucp') => {
     setIsExporting(type);
     try {
       if (type === 'csv') await exportApi.downloadCsv(postId);
