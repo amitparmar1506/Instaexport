@@ -1,0 +1,20 @@
+[phases.setup]
+nixPkgs = [
+  "nodejs_20",
+  "chromium",
+  "noto-fonts-emoji",
+  "noto-fonts",
+  "fontconfig"
+]
+
+[variables]
+NIXPACKS_NODE_VERSION = "20"
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+PUPPETEER_EXECUTABLE_PATH = "/run/current-system/sw/bin/chromium"
+FONTCONFIG_PATH = "/etc/fonts"
+
+[phases.install]
+cmds = ["npm install"]
+
+[start]
+cmd = "node src/index.js"
