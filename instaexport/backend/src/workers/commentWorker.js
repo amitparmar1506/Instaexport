@@ -93,7 +93,17 @@ async function processCommentIngestion(job) {
       const replyUpserts = [];
       for (const comment of rootComments) {
         if (comment.replies?.data?.length > 0) {
-          for (const reply of comment.replies.data) {
+          let actualReplies = comment.replies.data;
+          try {
+            const repliesRes = await axios.get(`${IG_GRAPH_URL}/${comment.id}/replies`, {
+              params: { fields: 'id,text,like_count,timestamp,username,from', access_token: accessToken, limit: 50 }
+            });
+            if (repliesRes.data?.data) actualReplies = repliesRes.data.data;
+          } catch (err) {
+            console.error(`[Worker] Failed fetching explicit replies for ${comment.id}`, err.message);
+          }
+
+          for (const reply of actualReplies) {
             replyUpserts.push({
               post_id: postId,
               instagram_comment_id: reply.id,
